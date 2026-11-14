@@ -1,0 +1,39 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Tirgumim",
+  "version": "0.2.0",
+  "identifier": "com.tirgumim.launcher",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "תרגומים",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 900,
+        "minHeight": 580,
+        "center": true,
+        "decorations": false,
+        "backgroundColor": "#14161b"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' ipc: http://ipc.localhost; img-src 'self' data: poster: http://poster.localhost; style-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"],
+    "resources": { "../catalog/catalog.json": "catalog.json" },
+    "windows": {
+      "nsis": { "languages": ["Hebrew", "English"], "displayLanguageSelector": false }
+    }
+  }
+}

@@ -1,6 +1,8 @@
-# Tirgumim Launcher — Design (v0.1)
+# Tirgumim Launcher — Design (v0.2)
 
-Windows desktop app (Electron) that installs Hebrew translation packs into games.
+Windows desktop app (Tauri 2: Rust core in `src-tauri/`, React + TypeScript window in `src/`) that installs
+Hebrew translation packs into games. v0.1 was Electron; v0.2 is a rewrite with the same catalog, pack and
+`state.json` formats, so installs made by v0.1 carry over.
 UI is Hebrew, right-to-left. No login in v0.1 (packs carry a `requiresAccount`
 flag so accounts can be added later without changing the pack format).
 
@@ -11,7 +13,7 @@ flag so accounts can be added later without changing the pack format).
 | **Catalog** | `catalog.json` on GitHub (raw URL, configurable) | List of supported games, how to find them, and the latest pack for each |
 | **Pack** | `.zip` on a GitHub Release | `tirgumim-pack.json` manifest + `files/` tree |
 | **Launcher** | this repo | Finds games, downloads/verifies packs, installs with backup, restores |
-| **make-pack tool** | `tools/make-pack.js` | Builds a pack zip from a folder, fills in hashes, prints the catalog entry |
+| **make-pack tool** | `npm run make-pack` (`src-tauri/src/core/tools.rs`) | Builds a pack zip from a folder, fills in hashes, prints the catalog entry |
 
 ## 2. Catalog format (`catalog.json`)
 
@@ -24,18 +26,15 @@ flag so accounts can be added later without changing the pack format).
       "name": "Phantom Blade Zero",
       "nameHe": "פנטום בלייד זירו",
       "engine": "unreal",
+      "aboutHe": "תרגום מלא של התפריטים, הכתוביות והדיאלוגים.",
       "detect": {
         "steamAppId": "4115450",
         "epicAppName": null,
-        "markerFile": "platform/steam/PBZ.exe"
+        "markerFile": "platform/steam/PBZ.exe",
+        "processNames": ["PBZ.exe", "PBZ-Win64-Shipping.exe"]
       },
-      "pack": {
-        "version": "0.1.0",
-        "url": "https://github.com/<org>/<repo>/releases/download/pbz-0.1.0/pbz-he-0.1.0.zip",
-        "sha256": "…",
-        "size": 123456,
-        "changelog": "גרסה ראשונה"
-      }
+      "pack": { "github": "NamiSwan222/tirgumim", "tag": "pbz-*", "asset": "pbz-he-*.zip" },
+      "requires": []
     }
   ]
 }
@@ -43,9 +42,25 @@ flag so accounts can be added later without changing the pack format).
 
 - `detect.markerFile` is a path relative to the game root that must exist; it is
   how a Steam/Epic/custom folder is confirmed to be the right game.
-- `pack.url` may be absolute (`https://`, `file://`) or relative to the catalog URL
-  (used by the local dev catalog).
-- The zip's SHA-256 is checked after download, before anything is extracted.
+- `detect.processNames`: the game's programs. While one runs, install, update and uninstall are refused
+  ("close the game first") and the game page says so.
+- `requires`: files the game folder must have (or must not have, with `"absent": true`) before the
+  pack can go in, each with a Hebrew `message` and an optional https `url`. Shown on the game page and
+  checked before downloading. A manifest can list `requires` too (checked at install).
+- `poster` / `hero`: optional cover (2:3) and wide art URLs; otherwise Steam's.
+
+**Where the pack is.** Two forms:
+- **From a GitHub release** (`github`, `tag`, `asset`, optional `prerelease`): the launcher lists the
+  repository's releases, keeps those whose tag and file name match the patterns (`*` and `?`), takes the
+  highest version (the rightmost number run in the tag: `pbz-0.2.1` → `0.2.1`) and uses the SHA-256 GitHub
+  publishes for the file (`digest`). No checksum from GitHub means no install. The release notes become the
+  changelog unless `changelog` is set. Release lists are cached in `data\sources.json` for 10 minutes
+  (refresh asks again, but not sooner than 30 seconds); if GitHub can't be reached, the last list is used.
+  Without a login GitHub allows 60 requests an hour, and one repository serves every game.
+- **Written out**: `version`, `url`, `sha256`, `size`, `changelog`. `url` may be absolute (`https://`,
+  `file://`) or relative to the catalog URL (used by the local dev catalog).
+
+The zip's SHA-256 is checked after download, before anything is extracted.
 
 ## 3. Pack format (`.zip`)
 
@@ -105,8 +120,9 @@ Rules:
 State lives in `%APPDATA%\Tirgumim Launcher\` (`state.json` + `backups\<gameId>\…`).
 
 **Install**
+0. Refused while one of the game's `processNames` runs, or while catalog `requires` aren't met.
 1. Download zip → verify zip SHA-256 → read & validate manifest.
-2. Check `gameId`, launcher version, game version.
+2. Check `gameId`, launcher version, game version, manifest `requires`.
 3. Extract to a temp folder, verify every file's hash.
 4. For each file: if the target exists, copy it to `backups\<gameId>\<path>`.
 5. Copy pack files into the game folder.
@@ -121,11 +137,13 @@ For each file in the record:
   file alone and discard our stale backup.
 Then delete the record and backup folder.
 
-**Update** = uninstall old version, then install new. If the new install fails it
-rolls itself back, so the game is left original (and the UI says so).
+**Update**: the new pack is opened and checked first (game, launcher version, game version,
+requires); only then is the old version uninstalled and the new one installed. If the new install
+fails it rolls itself back, so the game is left original (and the UI says so).
 
-**Status** shown per game: not found / found / installed / update available /
-needs repair (some of our files were overwritten — usually after a game update).
+**Status** shown per game: not found / translation in progress / not available right now (GitHub
+couldn't be asked) / ready / installed / update available / needs repair (some of our files were
+overwritten, usually after a game update), plus "game is open" while it runs.
 
 ## 5. Finding games
 
@@ -141,16 +159,30 @@ A custom path wins over auto-detection.
 - The launcher lists every installed Steam game (all `appmanifest_*.acf` in all libraries) and
   every Epic game (`.item` manifests). Games in our catalog get the full card; the rest are
   shown as "on your PC, no translation yet".
-- **Posters**: catalog `poster` URL if set; otherwise Steam's own cached cover on this PC
-  (`Steam\appcache\librarycache\<appid>\…\library_capsule.jpg`); otherwise downloaded once from
-  Steam's CDN and cached in `%APPDATA%\Tirgumim Launcher\posters`. Epic games are matched to
-  their Steam page by name for the cover. Missing covers show the game's name.
+- **Art**: a cover (`library_600x900` / `library_capsule`) and a wide hero (`library_hero`) per game.
+  Catalog `poster` / `hero` URL if set; otherwise Steam's own cached art on this PC
+  (`Steam\appcache\librarycache\<appid>\…`); otherwise downloaded once from Steam's CDN and cached in
+  `%APPDATA%\Tirgumim Launcher\posters`. Epic games are matched to their Steam page by name. The
+  window loads art through the `poster` protocol (`http://poster.localhost/<cover|hero>/<steam|epic|game>/<id>`),
+  so nothing outside that cache is exposed to the page. Missing art falls back to a blurred cover, then
+  to the game's name.
 - **Catalog source**: the GitHub URL (default or set in Settings); if it can't be reached, the copy
   bundled in the launcher (`catalog/catalog.json`) is used and the UI says so.
 - Large files in version checks are hashed once per run and cached by size + modified time.
+- The window asks for the list again every 15 seconds (cached answers, so cheap), which notices a game
+  being opened or closed.
 
-## 7. Later
+## 7. The window (v0.2)
+
+Modeled on the Multiplayer Everything launcher: its own title bar (search, Ctrl+K; refresh, F5; window
+buttons), a sidebar of categories with counts (home, our translations, installed, updates, coming soon,
+games on this PC, settings), a home page with a rotating banner and shelves that page sideways, a game
+page with wide art fading into a blurred copy, four fact boxes, one main button with the rest under
+"More", and a "before installing" list of what still blocks the install. Messages float above the
+status bar, which shows where the catalog came from.
+
+## 8. Later
 - Accounts / paid packs: `requiresAccount` packs will need a signed download URL
   from our server instead of a public GitHub link. Pack format stays the same.
 - Signed catalog (ed25519) so a hijacked GitHub account can't push malicious packs.
-- Installer build (`electron-builder`, NSIS) and launcher auto-update.
+- Launcher self-update (Tauri updater, signed with an offline key).

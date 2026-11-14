@@ -1,0 +1,188 @@
+// A game's page: wide art that fades into a blurred copy of itself, the facts in four boxes, one main button with
+// the rest under "More", and what the game still needs before the translation can go in.
+import { useEffect, useRef, useState } from 'react'
+import type { Game, PcGame, Progress } from './api.ts'
+import { Art, Icon, ICON, StatusPill } from './ui.tsx'
+import { SOURCE, STEP, date, ltr, size, title } from './texts.ts'
+
+export type Act = 'install' | 'update' | 'uninstall'
+
+function Hero({ hero, cover, label, children }: { hero: string; cover: string; label: string; children: React.ReactNode }) {
+  const [heroFailed, setHeroFailed] = useState(false)
+  return (
+    <div className={`hero ${heroFailed ? 'no-hero' : ''}`}>
+      <div className="hero-bg">
+        {!heroFailed && <img src={hero} alt="" draggable={false} onError={() => setHeroFailed(true)} />}
+        {heroFailed && <img src={cover} alt="" draggable={false} className="blurred" onError={(e) => (e.currentTarget.style.display = 'none')} />}
+      </div>
+      <div className="hero-fade" />
+      <div className="hero-content">
+        <Art src={cover} label={label} className="hero-cover" />
+        <div className="hero-text">{children}</div>
+      </div>
+    </div>
+  )
+}
+
+function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div className="stat">
+      <div className="stat-label">{label}</div>
+      <div className="stat-value">{value || '—'}</div>
+      {sub && <div className="stat-sub">{sub}</div>}
+    </div>
+  )
+}
+
+function More({ items, disabled }: { items: { label: string; icon: string; danger?: boolean; onClick: () => void }[]; disabled: boolean }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const close = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false) }
+    window.addEventListener('mousedown', close)
+    return () => window.removeEventListener('mousedown', close)
+  }, [open])
+  if (!items.length) return null
+  return (
+    <div className="more" ref={ref}>
+      <button className="btn ghost" onClick={() => setOpen(!open)} disabled={disabled} aria-expanded={open}>
+        <Icon g={ICON.more} /> עוד
+      </button>
+      {open && (
+        <div className="menu" role="menu">
+          {items.map((it) => (
+            <button key={it.label} role="menuitem" className={it.danger ? 'danger' : ''} onClick={() => { setOpen(false); it.onClick() }}>
+              <Icon g={it.icon} /> {it.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function GamePage({ g, busy, progress, onBack, onAct, onPick, onOpenFolder, onOpenUrl }: {
+  g: Game
+  busy: boolean
+  progress: Progress | null
+  onBack: () => void
+  onAct: (kind: Act) => void
+  onPick: () => void
+  onOpenFolder: () => void
+  onOpenUrl: (url: string) => void
+}) {
+  const mine = progress && progress.gameId === g.id ? progress : null
+  const blocked = busy || !!g.running || g.needs.length > 0
+
+  let main: { label: string; icon: string; onClick: () => void; disabled?: boolean } | null = null
+  if (g.status === 'ready') main = { label: 'התקנת התרגום', icon: ICON.download, onClick: () => onAct('install'), disabled: blocked }
+  else if (g.status === 'updateAvailable') main = { label: `עדכון לגרסה ${g.available?.version ?? ''}`, icon: ICON.update, onClick: () => onAct('update'), disabled: blocked }
+  else if (g.status === 'needsRepair') main = { label: 'התקנה מחדש', icon: ICON.update, onClick: () => onAct('update'), disabled: blocked || !g.available }
+  else if (g.status === 'notFound') main = { label: 'בחירת תיקיית המשחק', icon: ICON.folder, onClick: onPick, disabled: busy }
+
+  const more = [
+    ...(g.location ? [{ label: 'פתיחת תיקיית המשחק', icon: ICON.folder, onClick: onOpenFolder }] : []),
+    ...(!g.installed && g.status !== 'notFound' ? [{ label: g.location ? 'שינוי תיקיית המשחק' : 'בחירת תיקיית המשחק', icon: ICON.folder, onClick: onPick }] : []),
+    ...(g.installed ? [{ label: 'הסרת התרגום', icon: ICON.remove, danger: true, onClick: () => onAct('uninstall') }] : []),
+  ]
+
+  // What still stands between the player and the translation.
+  const todo: { text: string; url?: string | null; kind: 'warn' | 'info' }[] = []
+  if (g.status === 'notFound') todo.push({ kind: 'warn', text: 'לא מצאנו את המשחק ב-Steam או ב-Epic. אם הוא מותקן במקום אחר, בחרו את התיקייה שלו.' })
+  if (g.running) todo.push({ kind: 'warn', text: `המשחק פתוח (${ltr(g.running)}). סגרו אותו כדי להתקין או להסיר את התרגום.` })
+  for (const n of g.needs) todo.push({ kind: 'warn', text: n.message, url: n.url })
+  if (g.status === 'needsRepair') todo.push({ kind: 'warn', text: 'חלק מקבצי התרגום הוחלפו, כנראה אחרי עדכון של המשחק. התקינו מחדש כדי לתקן.' })
+  if (g.status === 'unavailable') todo.push({ kind: 'info', text: 'לא הצלחנו לקבל את פרטי התרגום מ-GitHub. נסו לרענן בעוד כמה דקות.' })
+  if (g.status === 'noPack' || (g.inProgress && !g.available)) todo.push({ kind: 'info', text: 'אנחנו עדיין עובדים על התרגום למשחק הזה. כשהוא יהיה מוכן הוא יופיע כאן.' })
+  if (g.installed?.forced) todo.push({ kind: 'info', text: 'התרגום הותקן על גרסת משחק שלא נבדקה. אם משהו לא נראה טוב, אפשר להסיר אותו.' })
+
+  return (
+    <div className="page game-page">
+      <Hero hero={g.hero} cover={g.cover} label={g.name}>
+        <button className="back" onClick={onBack}><Icon g={ICON.back} /> חזרה</button>
+        <h1>{title(g)}</h1>
+        {g.nameHe && <div className="en">{g.name}</div>}
+        <div className="hero-meta">
+          <StatusPill g={g} />
+          {g.engine && g.engine !== 'custom' && <span className="chip">{g.engine === 'unreal' ? 'Unreal Engine' : g.engine === 'unity' ? 'Unity' : g.engine}</span>}
+        </div>
+        {g.aboutHe && <p className="about">{g.aboutHe}</p>}
+        <div className="actions">
+          {main && (
+            <button className="btn primary big" onClick={main.onClick} disabled={main.disabled}>
+              <Icon g={main.icon} /> {main.label}
+            </button>
+          )}
+          {g.status === 'installed' && <span className="done-note"><Icon g={ICON.ok} /> התרגום מותקן. משחק מהנה!</span>}
+          <More items={more} disabled={busy} />
+        </div>
+        {mine && (
+          <div className="progress-wrap">
+            <div className={`progress ${mine.fraction == null ? 'indeterminate' : ''}`}>
+              <span style={mine.fraction != null ? { width: `${Math.round(mine.fraction * 100)}%` } : undefined} />
+            </div>
+            <div className="progress-label">{STEP[mine.step] ?? ''}{mine.fraction != null && mine.step === 'download' ? ` ${ltr(`${Math.round(mine.fraction * 100)}%`)}` : ''}</div>
+          </div>
+        )}
+      </Hero>
+
+      <div className="page-body">
+        <div className="stats">
+          <Stat label="גרסת התרגום" value={g.installed?.version ?? g.available?.version ?? ''} sub={g.installed ? `הותקנה ב-${date(g.installed.installedAt)}` : g.available?.publishedAt ? `פורסמה ב-${date(g.available.publishedAt)}` : undefined} />
+          <Stat label="גודל ההורדה" value={size(g.available?.size)} sub={g.available ? (g.available.source === 'github' ? 'מ-GitHub' : undefined) : undefined} />
+          <Stat label="המשחק נמצא ב-" value={g.location ? SOURCE[g.location.source] ?? g.location.source : 'לא נמצא'} />
+          <Stat label="גרסת המשחק" value={g.installed?.gameVersion ?? (g.installed?.forced ? 'לא מוכרת' : '')} sub={g.installed ? `${g.installed.files} קבצים הותקנו` : undefined} />
+        </div>
+
+        {todo.length > 0 && (
+          <section className="todo">
+            <h3>{g.status === 'ready' || g.status === 'updateAvailable' || g.status === 'needsRepair' ? 'לפני ההתקנה' : 'מצב'}</h3>
+            <ul>
+              {todo.map((t, i) => (
+                <li key={i} className={t.kind}>
+                  <Icon g={t.kind === 'warn' ? ICON.warn : ICON.info} />
+                  <span>{t.text}</span>
+                  {t.url && <button className="link" onClick={() => onOpenUrl(t.url!)}>לפרטים <Icon g={ICON.link} /></button>}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {g.available?.changelog && (
+          <section className="notes">
+            <h3>מה חדש בגרסה {g.available.version}</h3>
+            <p>{g.available.changelog}</p>
+          </section>
+        )}
+
+        {g.location && (
+          <section className="where">
+            <h3>תיקיית המשחק</h3>
+            <div className="path" dir="ltr">{g.location.dir}</div>
+          </section>
+        )}
+      </div>
+    </div>
+  )
+}
+
+export function PcGamePage({ o, onBack }: { o: PcGame; onBack: () => void }) {
+  return (
+    <div className="page game-page">
+      <Hero hero={o.hero} cover={o.cover} label={o.name}>
+        <button className="back" onClick={onBack}><Icon g={ICON.back} /> חזרה</button>
+        <h1 dir="auto">{o.name}</h1>
+        <div className="hero-meta"><span className={`chip store-chip ${o.store}`}>{o.store === 'steam' ? 'Steam' : 'Epic Games'}</span></div>
+        <p className="about">עדיין אין לנו תרגום למשחק הזה. כשיהיה, הוא יופיע ב"התרגומים שלנו".</p>
+      </Hero>
+      <div className="page-body">
+        <section className="where">
+          <h3>תיקיית המשחק</h3>
+          <div className="path" dir="ltr">{o.dir}</div>
+        </section>
+      </div>
+    </div>
+  )
+}
