@@ -32,7 +32,7 @@ npm run release          # the Windows installer (src-tauri/target/release/bundl
 3. `npm run make-pack -- mypack/pack.config.json --game-dir "<clean game install>" --out out/pack.zip`
 4. Publish it. Either:
    - **GitHub release (easiest):** upload the zip to a release on `NamiSwan222/tirgumim` with a tag like
-     `pbz-0.1.0`. If the game's catalog entry has `"pack": { "github": "NamiSwan222/tirgumim", "tag": "pbz-*", "asset": "pbz-he-*.zip" }`,
+     `mygame-0.1.0`. If the game's catalog entry has `"pack": { "github": "NamiSwan222/tirgumim", "tag": "mygame-*", "asset": "mygame-he-*.zip" }`,
      the launcher finds the new version by itself, with the checksum GitHub publishes. No catalog edit.
    - **Written out:** paste the `pack` entry make-pack prints (url, sha256, size, version) into `catalog/catalog.json`.
 

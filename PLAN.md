@@ -5,15 +5,15 @@ release packs with a 10-minute cache, "close the game first", `requires`, and th
 install/uninstall test (`npm test`). Stage 2's installer exists (`npm run release`, NSIS, Hebrew);
 self-update and the signed catalog are still to do.
 
-## Stage 1: ready for the first real translation (Phantom Blade Zero), done
+## Stage 1: ready for the first real translation, done
 
 | # | What | How |
 |---|---|---|
-| 1 | **Pack straight from a GitHub release** | Catalog `pack` can be `{ "github": "NamiSwan222/tirgumim", "tag": "pbz-*", "asset": "pbz-he-*.zip" }`. The launcher finds the newest matching release and takes its version, URL, size and SHA-256 (GitHub's `digest`). Publishing a new version = upload a release; no catalog edit. The written-out form (url + sha256) still works. No digest from GitHub means no install. |
+| 1 | **Pack straight from a GitHub release** | Catalog `pack` can be `{ "github": "NamiSwan222/tirgumim", "tag": "mygame-*", "asset": "mygame-he-*.zip" }`. The launcher finds the newest matching release and takes its version, URL, size and SHA-256 (GitHub's `digest`). Publishing a new version = upload a release; no catalog edit. The written-out form (url + sha256) still works. No digest from GitHub means no install. |
 | 2 | **Go easy on GitHub** | GitHub allows 60 requests an hour without a login. Release lists are kept in `sources.json` and reused for 10 minutes; the רענון (refresh) button asks again; if GitHub can't be reached, the last answer is used. |
-| 3 | **The game must be closed** | `detect.processNames` in the catalog (e.g. `PBZ.exe`). Install, update and uninstall say "close the game first". |
+| 3 | **The game must be closed** | `detect.processNames` in the catalog (e.g. `MyGame.exe`). Install, update and uninstall say "close the game first". |
 | 4 | **Required files** | `requires: [{ "path", "message" }]` in the catalog or manifest, e.g. if a translation needs a mod loader. Install is off while it's missing, with the message shown. |
-| 5 | **Test on a copy of the game** | `npm test` copies the sample game, installs the pack, uninstalls it, and compares every file's hash with the start. Also run once by hand on a copy of the real PBZ folder. |
+| 5 | **Test on a copy of the game** | `npm test` copies the sample game, installs the pack, uninstalls it, and compares every file's hash with the start. Also run once by hand on a copy of the first real game folder. |
 
 ## Stage 2: giving the launcher to other people
 

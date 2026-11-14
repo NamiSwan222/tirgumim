@@ -22,18 +22,18 @@ flag so accounts can be added later without changing the pack format).
   "schema": 1,
   "games": [
     {
-      "id": "phantom-blade-zero",
-      "name": "Phantom Blade Zero",
-      "nameHe": "פנטום בלייד זירו",
+      "id": "my-game",
+      "name": "My Game",
+      "nameHe": "המשחק שלי",
       "engine": "unreal",
       "aboutHe": "תרגום מלא של התפריטים, הכתוביות והדיאלוגים.",
       "detect": {
-        "steamAppId": "4115450",
+        "steamAppId": "1234560",
         "epicAppName": null,
-        "markerFile": "platform/steam/PBZ.exe",
-        "processNames": ["PBZ.exe", "PBZ-Win64-Shipping.exe"]
+        "markerFile": "Binaries/Win64/MyGame.exe",
+        "processNames": ["MyGame.exe", "MyGame-Win64-Shipping.exe"]
       },
-      "pack": { "github": "NamiSwan222/tirgumim", "tag": "pbz-*", "asset": "pbz-he-*.zip" },
+      "pack": { "github": "NamiSwan222/tirgumim", "tag": "mygame-*", "asset": "mygame-he-*.zip" },
       "requires": []
     }
   ]
@@ -52,7 +52,7 @@ flag so accounts can be added later without changing the pack format).
 **Where the pack is.** Two forms:
 - **From a GitHub release** (`github`, `tag`, `asset`, optional `prerelease`): the launcher lists the
   repository's releases, keeps those whose tag and file name match the patterns (`*` and `?`), takes the
-  highest version (the rightmost number run in the tag: `pbz-0.2.1` → `0.2.1`) and uses the SHA-256 GitHub
+  highest version (the rightmost number run in the tag: `mygame-0.2.1` → `0.2.1`) and uses the SHA-256 GitHub
   publishes for the file (`digest`). No checksum from GitHub means no install. The release notes become the
   changelog unless `changelog` is set. Release lists are cached in `data\sources.json` for 10 minutes
   (refresh asks again, but not sooner than 30 seconds); if GitHub can't be reached, the last list is used.
@@ -75,10 +75,10 @@ files/
 ```json
 {
   "schema": 1,
-  "packId": "phantom-blade-zero-he",
-  "gameId": "phantom-blade-zero",
+  "packId": "my-game-he",
+  "gameId": "my-game",
   "version": "0.1.0",
-  "title": "תרגום עברי ל-Phantom Blade Zero",
+  "title": "תרגום עברי ל-My Game",
   "authors": ["Tirgumim"],
   "engine": "unreal",
   "minLauncherVersion": "0.1.0",
@@ -87,13 +87,13 @@ files/
     {
       "name": "1.0.0 (Steam)",
       "checks": [
-        { "path": "platform/steam/PBZ.exe", "sha256": "…" }
+        { "path": "Binaries/Win64/MyGame.exe", "sha256": "…" }
       ]
     }
   ],
   "allowUnknownGameVersion": false,
   "files": [
-    { "path": "ProjectPBZ/Content/Paks/~mods/zz_hebrew_P.pak", "sha256": "…", "size": 1048576 }
+    { "path": "MyGame/Content/Paks/~mods/zz_hebrew_P.pak", "sha256": "…", "size": 1048576 }
   ]
 }
 ```

@@ -1,21 +1,5 @@
 {
   "schema": 1,
   "updated": "2026-11-14",
-  "games": [
-    {
-      "id": "phantom-blade-zero",
-      "name": "Phantom Blade Zero",
-      "nameHe": "פנטום בלייד זירו",
-      "engine": "unreal",
-      "aboutHe": "תרגום עברי לתפריטים, לכתוביות ולדיאלוגים.",
-      "detect": {
-        "steamAppId": "4115450",
-        "epicAppName": null,
-        "markerFile": "platform/steam/PBZ.exe",
-        "processNames": ["PBZ.exe"]
-      },
-      "status": "inProgress",
-      "pack": { "github": "NamiSwan222/tirgumim", "tag": "pbz-*", "asset": "pbz-he-*.zip" }
-    }
-  ]
+  "games": []
 }
