@@ -174,7 +174,7 @@ A custom path wins over auto-detection.
 
 ## 7. The window (v0.2)
 
-Modeled on the Multiplayer Everything launcher: its own title bar (search, Ctrl+K; refresh, F5; window
+Its own title bar (search, Ctrl+K; refresh, F5; window
 buttons), a sidebar of categories with counts (home, our translations, installed, updates, coming soon,
 games on this PC, settings), a home page with a rotating banner and shelves that page sideways, a game
 page with wide art fading into a blurred copy, four fact boxes, one main button with the rest under

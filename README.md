@@ -4,8 +4,6 @@ Windows launcher that installs Hebrew translation packs into games, with a backu
 replaces and a full restore on uninstall. Hebrew, right-to-left interface.
 
 Built with **Tauri 2**: the work is done in Rust (`src-tauri/`), the window is React + TypeScript (`src/`).
-Its structure follows the [Multiplayer Everything launcher](https://github.com/multiplayereverything/multiplayer-mods-launcher)
-(MIT); the code here is our own.
 
 See [DESIGN.md](DESIGN.md) for the catalog and pack formats, and [PLAN.md](PLAN.md) for what's next.
 
