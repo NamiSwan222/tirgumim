@@ -1,0 +1,2 @@
+# Keep exact bytes: pack files and catalog hashes depend on them
+* -text

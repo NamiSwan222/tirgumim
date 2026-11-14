@@ -1,0 +1,21 @@
+{
+  "name": "tirgumim-launcher",
+  "productName": "Tirgumim",
+  "version": "0.1.0",
+  "description": "Tirgumim - Hebrew translation launcher for video games",
+  "main": "src/main/main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev-catalog",
+    "test": "node --test test/*.test.js",
+    "make-pack": "node tools/make-pack.js",
+    "dev:setup": "node tools/dev-setup.js"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.16"
+  },
+  "devDependencies": {
+    "electron": "^33.2.1"
+  }
+}

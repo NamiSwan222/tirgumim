@@ -1,0 +1,15 @@
+{
+  "packId": "sample-game-he",
+  "gameId": "sample-game",
+  "version": "0.1.0",
+  "title": "תרגום עברי למשחק הדוגמה",
+  "authors": ["Tirgumim"],
+  "engine": "custom",
+  "minLauncherVersion": "0.1.0",
+  "requiresAccount": false,
+  "gameVersions": [
+    { "name": "1.0", "checks": [ { "path": "SampleGame.exe" } ] }
+  ],
+  "allowUnknownGameVersion": true,
+  "filesDir": "files"
+}

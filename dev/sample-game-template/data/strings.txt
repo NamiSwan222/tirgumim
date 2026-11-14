@@ -1,0 +1,2 @@
+menu.start=Start Game
+menu.quit=Quit

@@ -1,0 +1,2 @@
+menu.start=התחל משחק
+menu.quit=יציאה
