@@ -140,6 +140,50 @@ bsdiff patch instead of the whole file, so it ships no copy of the game's own da
   older launchers don't know the field and would skip it. make-pack sets this.
 - Patching holds the original and the result in memory (a few hundred MB for a big `data.win` is fine).
 
+### Launch-only packs (`activation`, launcher 0.4.0+)
+
+Hebrew only when the game is started from the launcher ("שחק בעברית"); started from Steam or anywhere else, the
+game is the original. Without `activation` a pack is permanent, exactly as before.
+
+```json
+"activation": {
+  "mode": "args",                       // or "swap"
+  "exe": "UNDERTALE.exe",               // relative to the game root; must exist
+  "args": ["-game", "{gameDir}/data_he.win"],
+  "workingDir": "{gameDir}",            // optional, direct launches only; default the exe's folder
+  "via": "steam"                        // or "direct"; default "steam"
+}
+```
+
+- **`args`**: the pack only **adds** files (installing refuses anything that would replace a game file,
+  `WOULD_REPLACE`). A bsdiff patch writes its result to a new file with `"output": "data_he.win"`, leaving `path`
+  untouched. Play starts the game with `args`, so only that start loads the Hebrew files. For engines that can be
+  pointed at other files (GameMaker `-game`).
+- **`swap`**: install keeps every Hebrew file in `<game>/.tirgumim/he/` and changes no game file. Play:
+  1. checks the game is closed (`GAME_ALREADY_RUNNING` otherwise: never swap under a running game), and that the
+     game's files are still the ones the pack was prepared on (`GAME_CHANGED`);
+  2. writes `.tirgumim/active.json`, then renames the originals to `.tirgumim/orig/` and ours into place (instant,
+     same drive), or appends the bytes of an `append` patch;
+  3. starts the game and watches `detect.processNames` (it must appear within 3 minutes; it is over when none has
+     run for 15 s, so a game that restarts itself through Steam is still covered);
+  4. puts the originals back and removes the journal. Restoring looks only at the files on disk, so it is safe
+     after a crash at any step and can run again; a file the game replaced meanwhile (an update) is left alone.
+  The window can't be closed while a game is swapped in: closing hides it and the launcher quits after restoring.
+  A second launcher start shows the first one. If the launcher dies anyway, its next start restores (or, if the
+  game still runs, watches it again).
+- **`via: "steam"`** runs `steam.exe -applaunch <catalog detect.steamAppId> <args>`: Steam keeps the overlay,
+  playtime, achievements and DRM, and a game that would relaunch itself through Steam when started directly
+  doesn't need to. No `steam_appid.txt` or DRM workarounds. Steam not installed: `STEAM_MISSING`; not running:
+  Steam is started first. **`via: "direct"`** starts `exe` itself (games without Steam, or known to run directly).
+- **`append` patches** (swap packs only), for very big files:
+  `{ "path": "YGO_DATA.dat", "kind": "append", "fromSha256", "fromSize", "toSha256", "size", "data": "patches/YGO_DATA.dat.append" }`.
+  The result is the original followed by `data`. Nothing big is copied: play appends, restore cuts the file back to
+  `fromSize` and checks `fromSha256`. Install checks `toSha256` by streaming (no extra RAM).
+- A pack with `activation`, `append` or `output` needs `minLauncherVersion` 0.4.0 (0.3.0 refuses it instead of
+  installing it for good). `.tirgumim/` belongs to the launcher; packs can't put files there.
+- An update from a permanent pack to a launch-only one goes through the normal update (the permanent files are
+  removed and the originals restored first).
+
 ## 4. Install / update / uninstall
 
 State lives in `%APPDATA%\Tirgumim Launcher\` (`state.json` + `backups\<gameId>\…`).

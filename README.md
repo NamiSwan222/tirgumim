@@ -66,7 +66,13 @@ release with a checksum, the tests, and the window build. Pack releases in this 
    (relative to the config). make-pack reads the original from `--game-dir`, writes a bsdiff into the pack, checks
    that it rebuilds your file exactly, and fills in the hashes and `minLauncherVersion` (0.3.0). If you already
    have a bsdiff (BSDIFF40), use `"patchFile": "work/data.win.bsdiff"` instead. The `files/` folder is optional
-   then. See DESIGN.md, "Binary patches". Making the bsdiff of a file of a few hundred MB takes a while and
+   then. See DESIGN.md, "Binary patches".
+
+   **Launch-only (Hebrew only when started from the launcher):** add `"activation"` to the config
+   (DESIGN.md, "Launch-only packs"). For an args pack, give the patch `"output": "data_he.win"` so the original
+   stays untouched. For a very big file in a swap pack, use
+   `{ "path": "YGO_DATA.dat", "kind": "append", "appendFile": "work/added.bin" }` (streamed, never loaded into
+   memory). make-pack sets `minLauncherVersion` 0.4.0. Making the bsdiff of a file of a few hundred MB takes a while and
    several GB of memory.
 4. Publish it. Either:
    - **GitHub release (easiest):** upload the zip to a release on `NamiSwan222/tirgumim` with a tag like

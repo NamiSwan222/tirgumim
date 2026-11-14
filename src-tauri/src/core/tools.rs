@@ -79,8 +79,27 @@ pub fn make_pack(config: &Path, game_dir: Option<&Path>, out: Option<&Path>, url
         let path = p.get("path").and_then(Value::as_str).ok_or("Every patch needs \"path\"")?.to_string();
         let gd = game_dir.ok_or(format!("Patch \"{path}\" needs --game-dir (an untouched install) to read the original"))?;
         let orig_path = util::resolve_inside(gd, &path)?;
-        let orig = fs::read(&orig_path).map_err(|e| format!("{}: {e}", orig_path.display()))?;
         let local = |k: &str| p.get(k).and_then(Value::as_str).map(|r| cfg_dir.join(r));
+        if p.get("kind").and_then(Value::as_str) == Some("append") {
+            // { "path", "kind": "append", "appendFile": "work/added.bin" }: streamed, the original is never loaded.
+            let add = local("appendFile").ok_or(format!("Append patch \"{path}\" needs \"appendFile\""))?;
+            let mut h = Sha256::new();
+            let from_size = fs::metadata(&orig_path).map_err(|e| format!("{}: {e}", orig_path.display()))?.len();
+            let from_sha = sha256_file(&orig_path).map_err(|e| e.to_string())?;
+            std::io::copy(&mut fs::File::open(&orig_path).map_err(|e| e.to_string())?, &mut h).map_err(|e| e.to_string())?;
+            std::io::copy(&mut fs::File::open(&add).map_err(|e| format!("{}: {e}", add.display()))?, &mut h).map_err(|e| e.to_string())?;
+            let add_len = fs::metadata(&add).map_err(|e| e.to_string())?.len();
+            let zip_name = format!("patches/{}.append", util::safe_rel_path(&path)?);
+            patches.push(json!({
+                "path": path, "kind": "append",
+                "fromSha256": from_sha, "fromSize": from_size,
+                "toSha256": util::hex(&h.finalize()), "size": from_size + add_len,
+                "data": zip_name,
+            }));
+            patch_blobs.push((zip_name, fs::read(&add).map_err(|e| e.to_string())?));
+            continue;
+        }
+        let orig = fs::read(&orig_path).map_err(|e| format!("{}: {e}", orig_path.display()))?;
         let (diff, out) = match (local("patched"), local("patchFile")) {
             (Some(changed), None) => {
                 let target = fs::read(&changed).map_err(|e| format!("{}: {e}", changed.display()))?;
@@ -101,19 +120,26 @@ pub fn make_pack(config: &Path, game_dir: Option<&Path>, out: Option<&Path>, url
             _ => return Err(format!("Patch \"{path}\" needs exactly one of \"patched\" or \"patchFile\"")),
         };
         let zip_name = format!("patches/{}.bsdiff", util::safe_rel_path(&path)?);
-        patches.push(json!({
+        let mut entry = json!({
             "path": path,
             "fromSha256": util::hex(&Sha256::digest(&orig)),
             "toSha256": util::hex(&Sha256::digest(&out)),
             "size": out.len(),
             "patch": zip_name,
-        }));
+        });
+        // Args packs: the result is a new file next to the original.
+        if let Some(o) = p.get("output").and_then(Value::as_str) {
+            entry["output"] = json!(o);
+        }
+        patches.push(entry);
         patch_blobs.push((zip_name, diff));
     }
-    if !patches.is_empty() {
+    let launch = cfg.contains_key("activation") || patches.iter().any(|p| p.get("output").is_some() || p.get("kind").is_some());
+    let need = if launch { Some(manifest::LAUNCH_MIN_LAUNCHER) } else if !patches.is_empty() { Some(manifest::PATCHES_MIN_LAUNCHER) } else { None };
+    if let Some(need) = need {
         let min = cfg.get("minLauncherVersion").and_then(Value::as_str).unwrap_or("0");
-        if util::compare_versions(min, manifest::PATCHES_MIN_LAUNCHER).is_lt() {
-            cfg.insert("minLauncherVersion".into(), json!(manifest::PATCHES_MIN_LAUNCHER));
+        if util::compare_versions(min, need).is_lt() {
+            cfg.insert("minLauncherVersion".into(), json!(need));
         }
     }
 

@@ -5,7 +5,7 @@ import type { Game, PcGame, Progress } from './api.ts'
 import { Art, Icon, ICON, StatusPill } from './ui.tsx'
 import { SOURCE, STEP, date, ltr, size, title } from './texts.ts'
 
-export type Act = 'install' | 'update' | 'uninstall'
+export type Act = 'install' | 'update' | 'uninstall' | 'play'
 
 function Hero({ hero, cover, label, children }: { hero: string; cover: string; label: string; children: React.ReactNode }) {
   const [heroFailed, setHeroFailed] = useState(false)
@@ -80,17 +80,22 @@ export function GamePage({ g, busy, progress, onBack, onAct, onPick, onOpenFolde
   else if (g.status === 'updateAvailable') main = { label: `עדכון לגרסה ${g.available?.version ?? ''}`, icon: ICON.update, onClick: () => onAct('update'), disabled: blocked }
   else if (g.status === 'needsRepair') main = { label: 'התקנה מחדש', icon: ICON.update, onClick: () => onAct('update'), disabled: blocked || !g.available }
   else if (g.status === 'notFound') main = { label: 'בחירת תיקיית המשחק', icon: ICON.folder, onClick: onPick, disabled: busy }
+  else if (g.status === 'installed' && g.launchOnly) main = { label: 'שחק בעברית', icon: ICON.play, onClick: () => onAct('play'), disabled: busy || !!g.running }
+  else if (g.status === 'playing') main = { label: 'המשחק פועל בעברית', icon: ICON.play, onClick: () => {}, disabled: true }
 
   const more = [
     ...(g.location ? [{ label: 'פתיחת תיקיית המשחק', icon: ICON.folder, onClick: onOpenFolder }] : []),
     ...(!g.installed && g.status !== 'notFound' ? [{ label: g.location ? 'שינוי תיקיית המשחק' : 'בחירת תיקיית המשחק', icon: ICON.folder, onClick: onPick }] : []),
-    ...(g.installed ? [{ label: 'הסרת התרגום', icon: ICON.remove, danger: true, onClick: () => onAct('uninstall') }] : []),
+    ...(g.installed && g.status !== 'playing' ? [{ label: 'הסרת התרגום', icon: ICON.remove, danger: true, onClick: () => onAct('uninstall') }] : []),
   ]
 
   // What still stands between the player and the translation.
   const todo: { text: string; url?: string | null; kind: 'warn' | 'info' }[] = []
   if (g.status === 'notFound') todo.push({ kind: 'warn', text: 'לא מצאנו את המשחק ב-Steam או ב-Epic. אם הוא מותקן במקום אחר, בחרו את התיקייה שלו.' })
-  if (g.running) todo.push({ kind: 'warn', text: `המשחק פתוח (${ltr(g.running)}). סגרו אותו כדי להתקין או להסיר את התרגום.` })
+  if (g.running && g.status !== 'playing') todo.push({ kind: 'warn', text: g.launchOnly && g.installed
+    ? `המשחק פתוח (${ltr(g.running)}) בלי התרגום. כדי לשחק בעברית, סגרו אותו ולחצו "שחק בעברית".`
+    : `המשחק פתוח (${ltr(g.running)}). סגרו אותו כדי להתקין או להסיר את התרגום.` })
+  if (g.status === 'playing' && g.launchOnly === 'swap') todo.push({ kind: 'info', text: 'קבצי התרגום נמצאים עכשיו במשחק. כשתסגרו את המשחק, המשגר יחזיר את הקבצים המקוריים. השאירו את המשגר פתוח עד אז.' })
   for (const n of g.needs) todo.push({ kind: 'warn', text: n.message, url: n.url })
   if (g.status === 'needsRepair') todo.push({ kind: 'warn', text: 'חלק מקבצי התרגום הוחלפו, כנראה אחרי עדכון של המשחק. התקינו מחדש כדי לתקן.' })
   if (g.status === 'unavailable') todo.push({ kind: 'info', text: 'לא הצלחנו לקבל את פרטי התרגום מ-GitHub. נסו לרענן בעוד כמה דקות.' })
@@ -114,7 +119,8 @@ export function GamePage({ g, busy, progress, onBack, onAct, onPick, onOpenFolde
               <Icon g={main.icon} /> {main.label}
             </button>
           )}
-          {g.status === 'installed' && <span className="done-note"><Icon g={ICON.ok} /> התרגום מותקן. משחק מהנה!</span>}
+          {g.status === 'installed' && !g.launchOnly && <span className="done-note"><Icon g={ICON.ok} /> התרגום מותקן. משחק מהנה!</span>}
+          {g.status === 'installed' && g.launchOnly && <span className="done-note"><Icon g={ICON.ok} /> התרגום מוכן. הוא פועל רק כשמפעילים את המשחק מכאן. מ-Steam המשחק נפתח כרגיל.</span>}
           <More items={more} disabled={busy} />
         </div>
         {mine && (

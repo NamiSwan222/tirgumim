@@ -15,7 +15,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::core::catalog::{self, Catalog, CatalogGame, ReleaseCache, ResolvedPack};
 use crate::core::detect::{self, PcGame};
 use crate::core::installer::{InstallOptions, InstallRecord, Installer, PackError, UninstallResult};
-use crate::core::manifest;
+use crate::core::manifest::{self, ActivationMode, Via};
+use crate::core::{launch, swap};
 
 /// The `poster` protocol as the window reaches it (Tauri serves custom protocols at http://<name>.localhost on
 /// Windows).
@@ -52,6 +53,10 @@ pub struct Shared {
     busy: AtomicBool,
     poster_misses: Mutex<HashSet<String>>,
     steam_ids: Mutex<HashMap<String, Option<String>>>,
+    /// Games running in Hebrew from the launcher right now (swap packs: a watcher restores them on exit).
+    sessions: Mutex<HashSet<String>>,
+    /// The window was closed while a game ran: quit once every game is back to normal.
+    exit_after: AtomicBool,
 }
 
 fn err(code: &str, msg: impl Into<String>) -> PackError {
@@ -172,13 +177,18 @@ impl Shared {
     fn game_view(&self, g: &CatalogGame, procs: &HashSet<String>) -> Value {
         let loc = self.locate(g);
         let rec = self.installer.record(&g.id);
-        let verify = rec.as_ref().and_then(|_| self.installer.verify(&g.id));
+        // While a swap pack's files are in the game, its waiting copies are away: not a repair case.
+        let swapped = rec.as_ref().is_some_and(|r| !r.swap.is_empty() && swap::is_active(Path::new(&r.game_dir)));
+        let playing = swapped || self.sessions.lock().unwrap().contains(&g.id);
+        let verify = rec.as_ref().filter(|_| !swapped).and_then(|_| self.installer.verify(&g.id));
         let pack = self.pack(&g.id);
         let available = pack.as_ref().and_then(|p| p.as_ref().ok()).cloned();
         // No matching release yet just means the translation isn't published: shown as "in progress".
         let pack_error = pack.as_ref().and_then(|p| p.as_ref().err()).filter(|e| e.as_str() != catalog::NO_RELEASE).cloned();
         let status = if rec.is_some() {
-            if verify.as_ref().is_some_and(|v| !v.intact) {
+            if playing {
+                "playing"
+            } else if verify.as_ref().is_some_and(|v| !v.intact) {
                 "needsRepair"
             } else if self.installer.update_available(&g.id, available.as_ref().map(|a| a.version.as_str())) {
                 "updateAvailable"
@@ -209,6 +219,7 @@ impl Shared {
             "available": available,
             "packError": pack_error,
             "running": self.running(g, procs),
+            "launchOnly": rec.as_ref().and_then(|r| r.activation.as_ref()).map(|a| match a.mode { ActivationMode::Args => "args", ActivationMode::Swap => "swap" }),
             "needs": needs,
             "installed": rec.as_ref().map(|r| json!({
                 "version": r.version, "installedAt": r.installed_at, "gameVersion": r.game_version,
@@ -295,12 +306,111 @@ impl Shared {
         res
     }
 
+    /// "Play in Hebrew": checks, puts a swap pack's files in place, starts the game (through Steam or directly) and,
+    /// for swap packs, watches it so the originals come back when it exits.
+    fn play(&self, app: &AppHandle, game_id: &str) -> Result<Value, PackError> {
+        let g = self.game(game_id)?;
+        let rec = self.installer.record(game_id).ok_or_else(|| err("NOT_INSTALLED", "The translation is not prepared yet"))?;
+        let act = rec.activation.clone().ok_or_else(|| err("NOT_LAUNCH_ONLY", "This translation is always on; start the game as usual"))?;
+        let dir = PathBuf::from(&rec.game_dir);
+        if self.sessions.lock().unwrap().contains(game_id) {
+            return Err(err("SESSION_ACTIVE", "The game is already running in Hebrew"));
+        }
+        // Started some other way (Steam): never swap files under a running game.
+        let procs = detect::running_processes();
+        if let Some(p) = self.running(&g, &procs) {
+            return Err(err("GAME_ALREADY_RUNNING", format!("{p} is already running")));
+        }
+        if act.mode == ActivationMode::Args && self.installer.verify(game_id).is_some_and(|v| !v.intact) {
+            return Err(err("NEEDS_REPAIR", "Some translation files changed"));
+        }
+        let steam = launch::steam_exe();
+        let cmd = launch::build(&act, &dir, g.detect.steam_app_id.as_deref(), steam.as_deref(), &procs)?;
+        let watch = act.mode == ActivationMode::Swap;
+        if watch {
+            self.with_busy(|| swap::activate(&dir, game_id, &rec.swap))?;
+        }
+        if let Err(e) = launch::spawn(&cmd) {
+            if watch {
+                let _ = swap::restore(&dir, &rec.swap);
+            }
+            return Err(e);
+        }
+        if watch {
+            self.sessions.lock().unwrap().insert(game_id.to_string());
+            spawn_watcher(app.clone(), game_id.to_string(), false);
+        }
+        let _ = app.emit("session", json!({ "gameId": game_id, "state": "started" }));
+        Ok(json!({ "startingSteam": cmd.starting_steam, "via": if act.via == Via::Steam { "steam" } else { "direct" }, "watched": watch }))
+    }
+
     fn with_busy<T>(&self, f: impl FnOnce() -> Result<T, PackError>) -> Result<T, PackError> {
         if self.busy.swap(true, Ordering::SeqCst) {
             return Err(err("BUSY", "Another operation is running"));
         }
         let _g = BusyGuard(&self.busy);
         f()
+    }
+}
+
+/// Waits for the game to start and to exit (all of its processes gone for 15 s, so a game that restarts itself
+/// through Steam is still covered), then puts the original files back. `already_running`: adopted at launcher
+/// start after the window had been closed or the launcher had crashed.
+fn spawn_watcher(app: AppHandle, game_id: String, already_running: bool) {
+    std::thread::spawn(move || {
+        use std::time::{Duration, Instant};
+        let st = app.state::<Shared>();
+        let names: Vec<String> = st.game(&game_id).map(|g| g.detect.process_names.iter().map(|p| p.to_lowercase()).collect()).unwrap_or_default();
+        let start = Instant::now();
+        let (mut seen, mut last) = (already_running, Instant::now());
+        let mut told = false;
+        loop {
+            std::thread::sleep(Duration::from_secs(2));
+            let procs = detect::running_processes();
+            if names.iter().any(|n| procs.contains(n)) {
+                seen = true;
+                last = Instant::now();
+                if !told {
+                    told = true;
+                    let _ = app.emit("session", json!({ "gameId": game_id, "state": "running" }));
+                }
+            } else if seen && last.elapsed() > Duration::from_secs(15) {
+                break;
+            } else if !seen && start.elapsed() > Duration::from_secs(180) {
+                let _ = app.emit("session", json!({ "gameId": game_id, "state": "neverStarted" }));
+                break;
+            }
+        }
+        let res = st.installer.record(&game_id).map(|r| swap::restore(Path::new(&r.game_dir), &r.swap));
+        st.sessions.lock().unwrap().remove(&game_id);
+        let _ = match res {
+            Some(Err(e)) => app.emit("session", json!({ "gameId": game_id, "state": "restoreFailed", "error": e })),
+            Some(Ok(r)) => app.emit("session", json!({ "gameId": game_id, "state": "restored", "leftChanged": r.left_changed })),
+            None => Ok(()),
+        };
+        if st.exit_after.load(Ordering::SeqCst) && st.sessions.lock().unwrap().is_empty() {
+            app.exit(0);
+        }
+    });
+}
+
+/// At launcher start: a swap left in place (the launcher crashed or was killed) is restored, or, if the game is
+/// still running, watched again.
+fn recover_swaps(app: &AppHandle) {
+    let st = app.state::<Shared>();
+    let procs = detect::running_processes();
+    for (game_id, rec) in st.installer.load_state().installs {
+        let dir = PathBuf::from(&rec.game_dir);
+        if rec.swap.is_empty() || !swap::is_active(&dir) {
+            continue;
+        }
+        let names: Vec<String> = st.game(&game_id).map(|g| g.detect.process_names.iter().map(|p| p.to_lowercase()).collect()).unwrap_or_default();
+        if names.iter().any(|n| procs.contains(n)) {
+            st.sessions.lock().unwrap().insert(game_id.clone());
+            spawn_watcher(app.clone(), game_id, true);
+        } else if let Err(e) = swap::restore(&dir, &rec.swap) {
+            eprintln!("restore {game_id}: {e}");
+        }
     }
 }
 
@@ -325,6 +435,22 @@ fn app_info(app: AppHandle, st: State<'_, Shared>) -> AppInfo {
 #[tauri::command]
 async fn list(app: AppHandle, reload: bool) -> Result<Value, PackError> {
     blocking(move || Ok(app.state::<Shared>().list(reload))).await
+}
+
+#[tauri::command]
+async fn play(app: AppHandle, game_id: String) -> Result<Value, PackError> {
+    blocking(move || app.state::<Shared>().play(&app, &game_id)).await
+}
+
+/// The window was closed while a game runs in Hebrew: hide it and quit after the game is back to normal.
+#[tauri::command]
+fn close_when_game_exits(app: AppHandle, st: State<'_, Shared>) {
+    st.exit_after.store(true, Ordering::SeqCst);
+    if st.sessions.lock().unwrap().is_empty() {
+        app.exit(0);
+    } else if let Some(w) = app.get_webview_window("main") {
+        let _ = w.hide();
+    }
 }
 
 #[tauri::command]
@@ -532,6 +658,15 @@ fn data_root() -> PathBuf {
 
 pub fn run(dev: bool) {
     tauri::Builder::default()
+        // One launcher at a time (two would both watch a swap); a second start shows the first window.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            app.state::<Shared>().exit_after.store(false, Ordering::SeqCst);
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         // Self-update from our GitHub releases (see `.github/workflows/release.yml`), then restart.
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -558,10 +693,28 @@ pub fn run(dev: bool) {
                 busy: AtomicBool::new(false),
                 poster_misses: Mutex::new(HashSet::new()),
                 steam_ids: Mutex::new(HashMap::new()),
+                sessions: Mutex::new(HashSet::new()),
+                exit_after: AtomicBool::new(false),
+            });
+            // Needs the catalog (process names), so after a first load, off the window's thread.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                handle.state::<Shared>().refresh_catalog(false);
+                recover_swaps(&handle);
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![app_info, list, install, update, uninstall, pick_folder, open_folder, open_url, get_settings, set_settings])
+        .on_window_event(|w, e| {
+            // Never quit while a swap is in place without someone to restore it.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = e {
+                let st = w.app_handle().state::<Shared>();
+                if !st.sessions.lock().unwrap().is_empty() && !st.exit_after.load(Ordering::SeqCst) {
+                    api.prevent_close();
+                    let _ = w.emit("close-blocked", ());
+                }
+            }
+        })
+        .invoke_handler(tauri::generate_handler![app_info, list, play, close_when_game_exits, install, update, uninstall, pick_folder, open_folder, open_url, get_settings, set_settings])
         .run(tauri::generate_context!())
         .expect("error while running the launcher");
 }

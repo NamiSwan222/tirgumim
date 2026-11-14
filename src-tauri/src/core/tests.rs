@@ -401,3 +401,223 @@ fn patch_manifest_rules() {
     let old = Installer::new(p.s.root.join("old"), "0.2.0");
     assert_eq!(old.install(&opts(&p.s, &zip, None, false), &mut |_| {}).unwrap_err().code, "LAUNCHER_TOO_OLD");
 }
+
+// ---------- launch-only packs (activation: args / swap) ----------
+
+use super::swap;
+
+/// The game folder without the launcher's own `.tirgumim` folder: what Steam (or the player) sees.
+fn game_tree(dir: &Path) -> BTreeMap<String, String> {
+    tree(dir).into_iter().filter(|(k, _)| !k.starts_with(".tirgumim")).collect()
+}
+
+/// A launch-only pack built with make-pack on the patch setup (sample pack files + data.win).
+fn launch_pack(p: &PatchSetup, name: &str, activation: serde_json::Value, patches: serde_json::Value) -> Result<(PathBuf, serde_json::Value), String> {
+    let src = p.s.root.join(format!("packsrc-{name}"));
+    let _ = fs::remove_dir_all(&src);
+    copy_dir(&dev().join("sample-pack"), &src).unwrap();
+    fs::write(src.join("data.win.changed"), &p.changed).unwrap();
+    fs::write(src.join("big.append"), noise(50_000, 99)).unwrap();
+    edit_config(&src, |v| {
+        v["activation"] = activation;
+        v["patches"] = patches;
+    });
+    let made = make_pack(&src.join("pack.config.json"), Some(&p.clean), Some(&p.s.root.join(format!("{name}.zip"))), None)?;
+    Ok((made.out, made.manifest))
+}
+
+fn launch_setup() -> PatchSetup {
+    let mut p = patch_setup();
+    p.s.inst = Installer::new(p.s.root.join("data"), manifest::LAUNCH_MIN_LAUNCHER);
+    let big = noise(400_000, 3);
+    fs::write(p.clean.join("big.dat"), &big).unwrap();
+    fs::write(p.s.game.join("big.dat"), &big).unwrap();
+    p
+}
+
+#[test]
+fn args_pack_only_adds_files_and_leaves_every_original_alone() {
+    let p = launch_setup();
+    let act = serde_json::json!({ "mode": "args", "exe": "SampleGame.exe", "args": ["-game", "{gameDir}/data_he.win"], "via": "steam" });
+    let (zip, m) = launch_pack(&p, "args", act.clone(), serde_json::json!([{ "path": "data.win", "patched": "data.win.changed", "output": "data_he.win" }])).unwrap();
+    assert_eq!(m["minLauncherVersion"], manifest::LAUNCH_MIN_LAUNCHER);
+
+    // The sample pack replaces data/strings.txt, which an args pack may not do.
+    assert_eq!(p.s.inst.install(&opts(&p.s, &zip, None, false), &mut |_| {}).unwrap_err().code, "WOULD_REPLACE");
+
+    let src = p.s.root.join("packsrc-args");
+    fs::rename(src.join("files/data/strings.txt"), src.join("files/data/strings_he.txt")).unwrap();
+    let made = make_pack(&src.join("pack.config.json"), Some(&p.clean), Some(&p.s.root.join("args2.zip")), None).unwrap();
+    let before = tree(&p.s.game);
+    let rec = p.s.inst.install(&opts(&p.s, &made.out, None, false), &mut |_| {}).unwrap();
+    assert_eq!(rec.activation.as_ref().unwrap().mode, manifest::ActivationMode::Args);
+    let after = tree(&p.s.game);
+    for (k, v) in &before {
+        assert_eq!(after.get(k), Some(v), "{k} must not change");
+    }
+    assert_eq!(fs::read(p.s.game.join("data_he.win")).unwrap(), p.changed);
+    assert_eq!(fs::read(p.s.game.join("data.win")).unwrap(), p.original);
+    p.s.inst.uninstall("sample-game").unwrap();
+    assert_eq!(tree(&p.s.game), before);
+}
+
+#[test]
+fn swap_pack_is_hebrew_only_while_swapped_in() {
+    let p = launch_setup();
+    let original_game = tree(&p.s.game);
+    let act = serde_json::json!({ "mode": "swap", "exe": "SampleGame.exe" });
+    let (zip, _) = launch_pack(&p, "swap", act, serde_json::json!([
+        { "path": "data.win", "patched": "data.win.changed" },
+        { "path": "big.dat", "kind": "append", "appendFile": "big.append" }
+    ]))
+    .unwrap();
+    let rec = p.s.inst.install(&opts(&p.s, &zip, None, false), &mut |_| {}).unwrap();
+    assert_eq!(game_tree(&p.s.game), original_game, "preparing a swap pack changes no game file");
+    let kinds: Vec<_> = rec.swap.iter().map(|i| (i.path.as_str(), i.kind)).collect();
+    assert!(kinds.contains(&("data/strings.txt", swap::SwapKind::Replace)));
+    assert!(kinds.contains(&("data/fonts/hebrew.ttf", swap::SwapKind::Add)));
+    assert!(kinds.contains(&("big.dat", swap::SwapKind::Append)));
+    assert!(p.s.inst.verify("sample-game").unwrap().intact);
+
+    swap::activate(&p.s.game, "sample-game", &rec.swap).unwrap();
+    assert!(swap::is_active(&p.s.game));
+    assert!(read(&p.s.game.join("data/strings.txt")).contains("התחל משחק"));
+    assert!(p.s.game.join("data/fonts/hebrew.ttf").is_file());
+    assert_eq!(fs::read(p.s.game.join("data.win")).unwrap(), p.changed);
+    assert_eq!(fs::metadata(p.s.game.join("big.dat")).unwrap().len(), 450_000);
+    assert_eq!(p.s.inst.uninstall("sample-game").unwrap_err().code, "SWAP_ACTIVE");
+    assert_eq!(swap::activate(&p.s.game, "sample-game", &rec.swap).unwrap_err().code, "SWAP_ACTIVE");
+
+    let r = swap::restore(&p.s.game, &rec.swap).unwrap();
+    assert_eq!(r.restored.len(), 4);
+    assert!(!swap::is_active(&p.s.game));
+    assert_eq!(game_tree(&p.s.game), original_game, "after the game exits it is the original again");
+    assert!(swap::restore(&p.s.game, &rec.swap).unwrap().restored.is_empty(), "restoring twice is harmless");
+
+    // And it can be played again, then removed.
+    swap::activate(&p.s.game, "sample-game", &rec.swap).unwrap();
+    swap::restore(&p.s.game, &rec.swap).unwrap();
+    p.s.inst.uninstall("sample-game").unwrap();
+    assert_eq!(tree(&p.s.game), original_game, "nothing of ours is left");
+}
+
+#[test]
+fn swap_recovers_from_a_crash_at_any_step() {
+    let p = launch_setup();
+    let original_game = tree(&p.s.game);
+    let (zip, _) = launch_pack(&p, "swap", serde_json::json!({ "mode": "swap", "exe": "SampleGame.exe" }), serde_json::json!([
+        { "path": "data.win", "patched": "data.win.changed" },
+        { "path": "big.dat", "kind": "append", "appendFile": "big.append" }
+    ]))
+    .unwrap();
+    let rec = p.s.inst.install(&opts(&p.s, &zip, None, false), &mut |_| {}).unwrap();
+    let g = &p.s.game;
+    let own = g.join(".tirgumim");
+
+    // Crash 1: journal written, the original set aside, ours not yet in place; half the bytes appended.
+    fs::write(swap::journal(g), "{}").unwrap();
+    fs::create_dir_all(own.join("orig")).unwrap();
+    fs::rename(g.join("data.win"), own.join("orig/data.win")).unwrap();
+    {
+        use std::io::Write as _;
+        let mut f = fs::OpenOptions::new().append(true).open(g.join("big.dat")).unwrap();
+        f.write_all(&noise(50_000, 99)[..20_000]).unwrap();
+    }
+    swap::restore(g, &rec.swap).unwrap();
+    assert_eq!(game_tree(g), original_game);
+    assert!(!swap::is_active(g));
+
+    // Crash 2: fully active, the launcher killed. The next start restores.
+    swap::activate(g, "sample-game", &rec.swap).unwrap();
+    swap::restore(g, &rec.swap).unwrap();
+    assert_eq!(game_tree(g), original_game);
+    assert!(p.s.inst.verify("sample-game").unwrap().intact, "our files are back waiting for the next play");
+}
+
+#[test]
+fn swap_keeps_a_file_the_game_updated_while_playing_and_refuses_a_changed_game() {
+    let p = launch_setup();
+    let (zip, _) = launch_pack(&p, "swap", serde_json::json!({ "mode": "swap", "exe": "SampleGame.exe" }), serde_json::json!([])).unwrap();
+    let rec = p.s.inst.install(&opts(&p.s, &zip, None, false), &mut |_| {}).unwrap();
+    let g = &p.s.game;
+    swap::activate(g, "sample-game", &rec.swap).unwrap();
+    // A Steam update replaces the file while ours is in place.
+    fs::write(g.join("data/strings.txt"), "menu.start=Start Game (v1.1)\n").unwrap();
+    let r = swap::restore(g, &rec.swap).unwrap();
+    assert_eq!(r.left_changed, ["data/strings.txt"]);
+    assert!(read(&g.join("data/strings.txt")).contains("v1.1"), "the game's new file wins");
+    assert!(!g.join(".tirgumim/orig/data/strings.txt").exists());
+
+    // Next play: the game is not what the translation was prepared on.
+    let e = swap::activate(g, "sample-game", &rec.swap).unwrap_err();
+    assert!(e.code == "GAME_CHANGED" || e.code == "NEEDS_REPAIR", "{e:?}");
+    assert!(!swap::is_active(g));
+}
+
+/// The whole play loop with a real program standing in for the game: swap in, start it directly, see it in the
+/// process list, see it gone, restore.
+#[cfg(windows)]
+#[test]
+fn play_loop_with_a_real_process() {
+    use std::time::{Duration, Instant};
+    let p = launch_setup();
+    let original_game = tree(&p.s.game);
+    let (zip, _) = launch_pack(&p, "play", serde_json::json!({ "mode": "swap", "exe": "SampleGame.exe", "via": "direct", "args": ["-n", "3", "127.0.0.1"] }), serde_json::json!([])).unwrap();
+    let rec = p.s.inst.install(&opts(&p.s, &zip, None, false), &mut |_| {}).unwrap();
+    // A unique exe name, so other tests and programs can't be mistaken for it.
+    let exe_name = format!("tirgumimtest{}.exe", std::process::id());
+    let mut act = rec.activation.clone().unwrap();
+    act.exe = exe_name.clone();
+    fs::copy(std::path::Path::new(&std::env::var("SystemRoot").unwrap()).join("System32/PING.EXE"), p.s.game.join(&exe_name)).unwrap();
+
+    swap::activate(&p.s.game, "sample-game", &rec.swap).unwrap();
+    let cmd = super::launch::build(&act, &p.s.game, None, None, &Default::default()).unwrap();
+    super::launch::spawn(&cmd).unwrap();
+    let name = exe_name.to_lowercase();
+    let t = Instant::now();
+    let mut seen = false;
+    while t.elapsed() < Duration::from_secs(30) {
+        let running = super::detect::running_processes().contains(&name);
+        if running {
+            seen = true;
+        } else if seen {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    assert!(seen, "the started program shows in the process list");
+    assert!(!super::detect::running_processes().contains(&name), "and is gone after it exits");
+    swap::restore(&p.s.game, &rec.swap).unwrap();
+    fs::remove_file(p.s.game.join(&exe_name)).unwrap();
+    assert_eq!(game_tree(&p.s.game), original_game);
+}
+
+#[test]
+fn launch_manifest_rules() {
+    let h = |c: char| c.to_string().repeat(64);
+    let m = |act: serde_json::Value, patches: serde_json::Value, min: &str| {
+        serde_json::json!({ "schema": 1, "packId": "p", "gameId": "g", "version": "1", "minLauncherVersion": min,
+            "files": [{ "path": "a.txt", "sha256": h('c') }], "patches": patches, "activation": act }).to_string()
+    };
+    let args = serde_json::json!({ "mode": "args", "exe": "Game.exe", "args": ["-game", "{gameDir}/he.win"] });
+    let swap_act = serde_json::json!({ "mode": "swap", "exe": "Game.exe" });
+    let bs = |out: Option<&str>| {
+        let mut v = serde_json::json!({ "path": "data.win", "fromSha256": h('a'), "toSha256": h('b'), "patch": "patches/data.win.bsdiff" });
+        if let Some(o) = out { v["output"] = o.into(); }
+        v
+    };
+    let ap = serde_json::json!({ "path": "big.dat", "kind": "append", "fromSha256": h('a'), "fromSize": 10, "toSha256": h('b'), "data": "patches/big.append" });
+    let ok = |s: String| manifest::parse_manifest(&s).map(|_| ()).map_err(|e| e);
+    assert!(ok(m(args.clone(), serde_json::json!([bs(Some("he.win"))]), "0.4.0")).is_ok());
+    assert!(ok(m(swap_act.clone(), serde_json::json!([bs(None), ap.clone()]), "0.4.0")).is_ok());
+    assert!(ok(m(args.clone(), serde_json::json!([bs(Some("he.win"))]), "0.3.0")).is_err(), "0.3.0 would install it for good");
+    assert!(ok(m(args.clone(), serde_json::json!([bs(None)]), "0.4.0")).is_err(), "args patches must write a new file");
+    assert!(ok(m(args.clone(), serde_json::json!([ap.clone()]), "0.4.0")).is_err(), "append changes the original");
+    assert!(ok(m(swap_act.clone(), serde_json::json!([bs(Some("he.win"))]), "0.4.0")).is_err());
+    assert!(ok(m(serde_json::Value::Null, serde_json::json!([ap]), "0.4.0")).is_err(), "append is for swap packs");
+    let mut bad_arg = args.clone();
+    bad_arg["args"] = serde_json::json!(["{appData}/x"]);
+    assert!(ok(m(bad_arg, serde_json::json!([bs(Some("he.win"))]), "0.4.0")).is_err());
+    let own = serde_json::json!({ "schema": 1, "packId": "p", "gameId": "g", "version": "1", "files": [{ "path": ".tirgumim/x", "sha256": h('c') }] });
+    assert!(manifest::parse_manifest(&own.to_string()).is_err());
+}

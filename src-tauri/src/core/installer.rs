@@ -9,13 +9,14 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::manifest::{self, Manifest, VersionMatch, MANIFEST_NAME};
+use super::manifest::{self, Activation, ActivationMode, Manifest, PatchKind, VersionMatch, MANIFEST_NAME};
+use super::swap::{self, SwapItem, SwapKind};
 use super::util::{self, compare_versions, resolve_inside, sha256_file, sha256_file_cached};
 
 #[derive(Debug, Clone, Serialize)]
@@ -77,6 +78,12 @@ pub struct InstallRecord {
     pub files: Vec<RecordFile>,
     #[serde(default)]
     pub created_dirs: Vec<String>,
+    /// Launch-only packs: how the game is started in Hebrew.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activation: Option<Activation>,
+    /// Swap packs: what is put in place while the game runs from the launcher.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub swap: Vec<SwapItem>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -232,20 +239,35 @@ impl Installer {
                 progress("patch");
             }
             for p in &pack.manifest.patches {
-                let mut diff = Vec::new();
-                match by_name.get(&p.patch).copied().map(|i| pack.archive.by_index(i)) {
-                    Some(Ok(mut e)) if !e.is_dir() => {
-                        e.read_to_end(&mut diff).map_err(|e| PackError::new("ZIP_READ", e.to_string()))?;
+                let mut entry = match by_name.get(p.zip_entry()).copied().map(|i| pack.archive.by_index(i)) {
+                    Some(Ok(e)) if !e.is_dir() => e,
+                    _ => return Err(PackError::new("MISSING_FILE", format!("Pack is missing patch {}", p.zip_entry()))),
+                };
+                let original = resolve_inside(game_dir, &p.path).map_err(|e| PackError::new("BAD_MANIFEST", e))?;
+                if p.kind == PatchKind::Append {
+                    // Kept as it is (the bytes to add); the result is checked without writing a 1 GB file:
+                    // the hash of the original followed by these bytes must be toSha256.
+                    let dest = resolve_inside(&tmp, &swap::staged_rel(&p.path, SwapKind::Append)).map_err(|e| PackError::new("BAD_MANIFEST", e))?;
+                    fs::create_dir_all(dest.parent().unwrap())?;
+                    io::copy(&mut entry, &mut fs::File::create(&dest)?).map_err(|e| PackError::new("ZIP_READ", e.to_string()))?;
+                    let mut h = Sha256::new();
+                    io::copy(&mut fs::File::open(&original)?, &mut h)?;
+                    io::copy(&mut fs::File::open(&dest)?, &mut h)?;
+                    if util::hex(&h.finalize()) != p.to_sha256 {
+                        return Err(PackError::new("PATCH_FAILED", format!("Patch for {} gave the wrong result", p.path)));
                     }
-                    _ => return Err(PackError::new("MISSING_FILE", format!("Pack is missing patch {}", p.patch))),
+                    continue;
                 }
-                let src = fs::read(resolve_inside(game_dir, &p.path).map_err(|e| PackError::new("BAD_MANIFEST", e))?)?;
+                let mut diff = Vec::new();
+                entry.read_to_end(&mut diff).map_err(|e| PackError::new("ZIP_READ", e.to_string()))?;
+                drop(entry);
+                let src = fs::read(&original)?;
                 let out = apply_patch(&src, &diff).map_err(|e| PackError::new("PATCH_FAILED", format!("Patch for {} failed: {e}", p.path)))?;
                 drop(src);
                 if util::hex(&Sha256::digest(&out)) != p.to_sha256 {
                     return Err(PackError::new("PATCH_FAILED", format!("Patch for {} gave the wrong result", p.path)));
                 }
-                let dest = resolve_inside(&tmp, &p.path).map_err(|e| PackError::new("BAD_MANIFEST", e))?;
+                let dest = resolve_inside(&tmp, p.target()).map_err(|e| PackError::new("BAD_MANIFEST", e))?;
                 fs::create_dir_all(dest.parent().unwrap())?;
                 fs::write(&dest, &out)?;
             }
@@ -279,7 +301,8 @@ impl Installer {
             .iter()
             .filter(|p| {
                 let abs = resolve_inside(game_dir, &p.path).ok().filter(|a| a.is_file());
-                abs.and_then(|a| sha256_file_cached(&a).ok()).as_deref() != Some(p.from_sha256.as_str())
+                let size_ok = p.from_size.is_none_or(|n| abs.as_ref().and_then(|a| fs::metadata(a).ok()).map(|m| m.len()) == Some(n));
+                !size_ok || abs.and_then(|a| sha256_file_cached(&a).ok()).as_deref() != Some(p.from_sha256.as_str())
             })
             .map(|p| p.path.clone())
             .collect();
@@ -327,9 +350,9 @@ impl Installer {
         let res = (|| {
             progress("backup");
             let mut plan = Vec::new();
-            // Patched files go in like replaced ones: the original is backed up, the made file copied over it.
-            let entries = m.files.iter().map(|f| (&f.path, &f.sha256, false)).chain(m.patches.iter().map(|p| (&p.path, &p.to_sha256, true)));
-            for (path, sha256, patched) in entries {
+            let (entries, swap_items) = plan_entries(o.game_dir, m, tmp)?;
+            for (path, src, sha256, patched) in &entries {
+                let (path, sha256, patched) = (path, sha256, *patched);
                 let abs = resolve_inside(o.game_dir, path).map_err(|e| PackError::new("BAD_MANIFEST", e))?;
                 let backup = if abs.exists() {
                     if abs.is_dir() {
@@ -342,13 +365,13 @@ impl Installer {
                 } else {
                     None
                 };
-                plan.push((path, sha256, patched, abs, backup));
+                plan.push((path, src, sha256, patched, abs, backup));
             }
             progress("copy");
             let mut files = Vec::new();
-            for (path, sha256, patched, abs, backup) in plan {
+            for (path, src, sha256, patched, abs, backup) in plan {
                 mkdir_tracked(o.game_dir, abs.parent().unwrap(), &mut created)?;
-                fs::copy(resolve_inside(tmp, path).unwrap(), &abs)?;
+                fs::copy(resolve_inside(tmp, src).unwrap(), &abs)?;
                 files.push(RecordFile { path: path.clone(), sha256: sha256.clone(), backed_up: backup.is_some(), patched });
                 done.push((abs, backup));
             }
@@ -365,6 +388,8 @@ impl Installer {
                     .iter()
                     .map(|d| d.strip_prefix(o.game_dir).unwrap_or(d).to_string_lossy().replace('\\', "/"))
                     .collect(),
+                activation: m.activation.clone(),
+                swap: swap_items,
             };
             let mut s = self.load_state();
             s.installs.insert(o.game_id.into(), rec.clone());
@@ -390,6 +415,9 @@ impl Installer {
         check_game_id(game_id)?;
         let rec = self.record(game_id).ok_or_else(|| PackError::new("NOT_INSTALLED", "No translation installed for this game"))?;
         let game_dir = PathBuf::from(&rec.game_dir);
+        if !rec.swap.is_empty() && swap::is_active(&game_dir) {
+            return Err(PackError::new("SWAP_ACTIVE", "The game is running in Hebrew; close it first"));
+        }
         let bdir = self.backup_dir(game_id);
         let mut r = UninstallResult::default();
         for f in &rec.files {
@@ -463,6 +491,56 @@ impl Installer {
             _ => false,
         }
     }
+}
+
+/// What goes where, for the pack's mode: (path in the game, file in tmp, its sha256, patched).
+/// - permanent: files and patched files go in place (originals backed up);
+/// - args: everything goes in as new files; replacing a game file is refused;
+/// - swap: everything waits in `.tirgumim/he/`; the swap items say what is put in place at play time.
+#[allow(clippy::type_complexity)]
+fn plan_entries(game: &Path, m: &Manifest, tmp: &Path) -> Result<(Vec<(String, String, String, bool)>, Vec<SwapItem>)> {
+    let mut out = Vec::new();
+    let mut items = Vec::new();
+    match m.activation.as_ref().map(|a| a.mode) {
+        None => {
+            out.extend(m.files.iter().map(|f| (f.path.clone(), f.path.clone(), f.sha256.clone(), false)));
+            out.extend(m.patches.iter().map(|p| (p.path.clone(), p.path.clone(), p.to_sha256.clone(), true)));
+        }
+        Some(ActivationMode::Args) => {
+            out.extend(m.files.iter().map(|f| (f.path.clone(), f.path.clone(), f.sha256.clone(), false)));
+            out.extend(m.patches.iter().map(|p| (p.target().to_string(), p.target().to_string(), p.to_sha256.clone(), true)));
+            let taken: Vec<String> = out.iter().filter(|(p, ..)| resolve_inside(game, p).map(|a| a.exists()).unwrap_or(false)).map(|(p, ..)| p.clone()).collect();
+            if !taken.is_empty() {
+                let mut e = PackError::new("WOULD_REPLACE", format!("A launch-only pack may only add files, but these exist: {}", taken.join(", ")));
+                e.details = taken;
+                return Err(e);
+            }
+        }
+        Some(ActivationMode::Swap) => {
+            for f in &m.files {
+                let existing = resolve_inside(game, &f.path).ok().filter(|a| a.is_file());
+                let original = existing.as_ref().map(|a| util::sha256_file(a)).transpose()?;
+                let kind = if original.is_some() { SwapKind::Replace } else { SwapKind::Add };
+                out.push((swap::staged_rel(&f.path, kind), f.path.clone(), f.sha256.clone(), false));
+                let new_dirs = if kind == SwapKind::Add { swap::missing_dirs(game, &f.path) } else { vec![] };
+                items.push(SwapItem { path: f.path.clone(), kind, hebrew_sha256: f.sha256.clone(), original_sha256: original, original_size: None, append_size: None, new_dirs });
+            }
+            for p in &m.patches {
+                let staged = swap::staged_rel(&p.path, if p.kind == PatchKind::Append { SwapKind::Append } else { SwapKind::Replace });
+                if p.kind == PatchKind::Append {
+                    let data = resolve_inside(tmp, &staged).map_err(|e| PackError::new("BAD_MANIFEST", e))?;
+                    let sha = util::sha256_file(&data)?;
+                    let size = fs::metadata(&data)?.len();
+                    out.push((staged.clone(), staged, sha.clone(), true));
+                    items.push(SwapItem { path: p.path.clone(), kind: SwapKind::Append, hebrew_sha256: sha, original_sha256: Some(p.from_sha256.clone()), original_size: p.from_size, append_size: Some(size), new_dirs: vec![] });
+                } else {
+                    out.push((staged, p.path.clone(), p.to_sha256.clone(), true));
+                    items.push(SwapItem { path: p.path.clone(), kind: SwapKind::Replace, hebrew_sha256: p.to_sha256.clone(), original_sha256: Some(p.from_sha256.clone()), original_size: None, append_size: None, new_dirs: vec![] });
+                }
+            }
+        }
+    }
+    Ok((out, items))
 }
 
 /// Applies a BSDIFF40 patch (classic bsdiff 4 with bzip2) to `src`.

@@ -9,6 +9,7 @@ export const STATUS: Record<Status, string> = {
   installed: 'התרגום מותקן',
   updateAvailable: 'יש עדכון',
   needsRepair: 'דרוש תיקון',
+  playing: 'פועל בעברית עכשיו',
 }
 
 export const SOURCE: Record<string, string> = {
@@ -60,11 +61,24 @@ const ERRORS: Record<string, string> = {
   BUSY: 'פעולה אחרת עדיין רצה.',
   BAD_URL: 'הכתובת צריכה להתחיל ב-https://',
   IO: 'לא ניתן לכתוב לתיקיית המשחק. ייתכן שקובץ פתוח או שאין הרשאה.',
+  GAME_ALREADY_RUNNING: 'המשחק כבר פתוח (כנראה הופעל מ-Steam). סגרו אותו ולחצו שוב על "שחק בעברית".',
+  SESSION_ACTIVE: 'המשחק כבר פועל בעברית.',
+  STEAM_MISSING: 'Steam לא מותקן במחשב הזה. כדי לשחק בעברית צריך להתקין את Steam ולהתחבר אליו.',
+  STEAM_NO_APPID: 'חסרים פרטי Steam למשחק הזה ברשימת התרגומים.',
+  EXE_MISSING: 'קובץ ההפעלה של המשחק לא נמצא בתיקיית המשחק.',
+  LAUNCH_FAILED: 'לא הצלחנו להפעיל את המשחק.',
+  NOT_LAUNCH_ONLY: 'התרגום הזה פועל תמיד. הפעילו את המשחק כרגיל.',
+  SWAP_ACTIVE: 'המשחק פועל עכשיו בעברית. סגרו אותו קודם.',
+  SWAP_FAILED: 'לא הצלחנו להכניס את קבצי התרגום. קבצי המשחק המקוריים הוחזרו.',
+  RESTORE_FAILED: 'לא הצלחנו להחזיר את כל קבצי המשחק המקוריים. סגרו את המשחק ופתחו את המשגר שוב, הוא ינסה שוב.',
+  GAME_CHANGED: 'המשחק התעדכן מאז שהתרגום הוכן. התקינו את התרגום מחדש.',
+  NEEDS_REPAIR: 'חלק מקבצי התרגום חסרים או השתנו. התקינו את התרגום מחדש.',
+  WOULD_REPLACE: 'חבילת התרגום מנסה להחליף קבצים של המשחק, וזה לא מותר בתרגום שפועל רק מהמשגר.',
 }
 
 export function errorText(e: PackError): string {
   const base = ERRORS[e.code] ?? 'אירעה שגיאה.'
-  if ((e.code === 'REQUIRES' || e.code === 'PATCH_SOURCE') && e.details?.length) return `${base} ${e.details.join(' · ')}`
+  if ((e.code === 'REQUIRES' || e.code === 'PATCH_SOURCE' || e.code === 'GAME_CHANGED') && e.details?.length) return `${base} ${e.details.join(' · ')}`
   return e.code in ERRORS ? base : `${base} (${e.message})`
 }
 

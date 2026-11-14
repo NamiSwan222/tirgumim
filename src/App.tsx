@@ -150,9 +150,23 @@ ${self.available.notes}` : ''
     api.info().then(setInfo)
     load(false)
     const un = api.onProgress((p) => setProgress(p))
+    const unS = api.onSession((s) => {
+      if (s.state === 'restored') toast(s.leftChanged?.length ? 'המשחק נסגר. חלק מהקבצים עודכנו בינתיים על ידי המשחק ונשארו כמו שהם.' : 'המשחק נסגר והקבצים המקוריים חזרו. מ-Steam הוא ייפתח כרגיל.', 'ok')
+      else if (s.state === 'neverStarted') toast('המשחק לא נפתח, אז הקבצים המקוריים הוחזרו. נסו שוב.', 'info')
+      else if (s.state === 'restoreFailed') toast(s.error ? errorText(s.error) : 'לא הצלחנו להחזיר את הקבצים המקוריים.', 'error')
+      load(false)
+    })
+    const unC = api.onCloseBlocked(async () => {
+      const ok = await new Promise<boolean>((resolve) => setConfirm({
+        title: 'משחק פועל בעברית',
+        body: 'כדי שהמשחק יחזור לקבצים המקוריים כשהוא ייסגר, המשגר צריך להמשיך לפעול ברקע עד אז. לסגור את החלון ולסיים אחרי שהמשחק ייסגר?',
+        ok: 'סגירה אחרי שהמשחק ייסגר', resolve,
+      }))
+      if (ok) api.closeWhenGameExits()
+    })
     // While the window is open, notice a game being opened or closed, and new packs (cached answers, so cheap).
     const t = setInterval(() => load(false), 15000)
-    return () => { un.then((f) => f()); clearInterval(t) }
+    return () => { un.then((f) => f()); unS.then((f) => f()); unC.then((f) => f()); clearInterval(t) }
   }, [load])
 
   const go = (p: Page) => {
@@ -188,7 +202,18 @@ ${self.available.notes}` : ''
     toast('הרשימה עודכנה', 'ok')
   }
 
+  async function play(g: Game) {
+    try {
+      const r = await api.play(g.id)
+      toast(r.startingSteam ? 'פותח את Steam ואת המשחק בעברית…' : 'המשחק נפתח בעברית. משחק מהנה!', 'ok')
+    } catch (e) {
+      toast(errorText(asError(e)), 'error')
+    }
+    await load(false)
+  }
+
   async function act(kind: Act, g: Game, force = false): Promise<void> {
+    if (kind === 'play') return play(g)
     if (kind === 'uninstall' && !(await ask('הסרת התרגום', `להסיר את התרגום מ"${title(g)}" ולהחזיר את הקבצים המקוריים של המשחק?`, 'הסרה', true))) return
     setBusy(true)
     setProgress({ gameId: g.id, step: kind === 'uninstall' ? 'copy' : 'download', fraction: null })

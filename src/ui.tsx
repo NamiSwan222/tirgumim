@@ -28,6 +28,7 @@ export const ICON = {
   link: '',
   next: '', // chevron pointing left: "next" in RTL
   prev: '',
+  play: '\uE768',
   game: '',
 }
 

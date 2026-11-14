@@ -10,6 +10,56 @@ pub const MANIFEST_NAME: &str = "tirgumim-pack.json";
 pub const SCHEMA: u32 = 1;
 /// The first launcher that applies `patches`. Older ones ignore the field, so a pack with patches must require this.
 pub const PATCHES_MIN_LAUNCHER: &str = "0.3.0";
+/// The first launcher with launch-only packs (`activation`) and `append` patches.
+pub const LAUNCH_MIN_LAUNCHER: &str = "0.4.0";
+/// The launcher's own folder inside a game (swap mode keeps the Hebrew and original files there). Packs can't use it.
+pub const OWN_DIR: &str = ".tirgumim";
+
+/// How a launch-only pack turns on. Without `activation` a pack is permanent (installed into the game for good).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ActivationMode {
+    /// The pack only adds files; the game is started with arguments that point at them.
+    Args,
+    /// The Hebrew files are swapped in right before the game starts and back out when it exits.
+    Swap,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Via {
+    /// `steam.exe -applaunch <steamAppId> <args>`: Steam stays in charge (overlay, playtime, DRM).
+    #[default]
+    Steam,
+    /// The game's exe straight away.
+    Direct,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Activation {
+    pub mode: ActivationMode,
+    /// The game's program, relative to the game root (started with `via: direct`; always checked to exist).
+    pub exe: String,
+    /// Passed to the game; `{gameDir}` becomes the game folder.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    /// `{gameDir}` or a folder under it; default the exe's folder. Direct launches only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_dir: Option<String>,
+    #[serde(default)]
+    pub via: Via,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PatchKind {
+    /// A bsdiff (BSDIFF40) patch, applied in memory.
+    #[default]
+    Bsdiff,
+    /// Bytes added at the end of the file (swap packs only), undone by cutting the file back to `fromSize`.
+    Append,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,13 +76,40 @@ pub struct PackFile {
 #[serde(rename_all = "camelCase")]
 pub struct PackPatch {
     pub path: String,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub kind: PatchKind,
     pub from_sha256: String,
     pub to_sha256: String,
     /// The patched file's size.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<u64>,
-    /// The patch inside the pack zip, under `patches/`.
-    pub patch: String,
+    /// bsdiff: the patch inside the pack zip, under `patches/`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub patch: Option<String>,
+    /// append: the bytes to add, inside the pack zip under `patches/`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<String>,
+    /// append: the original file's size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_size: Option<u64>,
+    /// args packs: the patched file is written here (a new file) and `path` stays untouched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
+}
+
+fn is_default<T: Default + PartialEq>(v: &T) -> bool {
+    *v == T::default()
+}
+
+impl PackPatch {
+    /// Where the patched result goes in the game: `output` for args packs, else `path` itself.
+    pub fn target(&self) -> &str {
+        self.output.as_deref().unwrap_or(&self.path)
+    }
+    /// The zip entry this patch reads.
+    pub fn zip_entry(&self) -> &str {
+        self.patch.as_deref().or(self.data.as_deref()).unwrap_or("")
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -98,6 +175,9 @@ pub struct Manifest {
     pub files: Vec<PackFile>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub patches: Vec<PackPatch>,
+    /// Launch-only: Hebrew only when the game is started from the launcher.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activation: Option<Activation>,
 }
 
 pub fn is_sha256(s: &str) -> bool {
@@ -152,29 +232,87 @@ pub fn validate_manifest(mut m: Manifest) -> Result<Manifest, String> {
         }
         f.sha256 = f.sha256.to_lowercase();
     }
-    if !m.patches.is_empty() && m.min_launcher_version.as_deref().is_none_or(|v| compare_versions(v, PATCHES_MIN_LAUNCHER).is_lt()) {
+    let min = m.min_launcher_version.clone().unwrap_or_default();
+    let needs = |v: &str| min.is_empty() || compare_versions(&min, v).is_lt();
+    let launch_features = m.activation.is_some() || m.patches.iter().any(|p| p.kind == PatchKind::Append || p.output.is_some());
+    if launch_features && needs(LAUNCH_MIN_LAUNCHER) {
+        errs.push(format!("a pack with \"activation\", append patches or patch \"output\" needs \"minLauncherVersion\" {LAUNCH_MIN_LAUNCHER} or newer"));
+    } else if !m.patches.is_empty() && needs(PATCHES_MIN_LAUNCHER) {
         errs.push(format!("a pack with \"patches\" needs \"minLauncherVersion\" {PATCHES_MIN_LAUNCHER} or newer"));
+    }
+    let mode = m.activation.as_ref().map(|a| a.mode);
+    if let Some(a) = &mut m.activation {
+        match safe_rel_path(&a.exe) {
+            Ok(p) => a.exe = p,
+            Err(e) => errs.push(format!("activation exe: {e}")),
+        }
+        if a.working_dir.as_deref().is_some_and(|w| !w.starts_with("{gameDir}") || w.contains("..")) {
+            errs.push("activation workingDir must start with {gameDir}".into());
+        }
+        for arg in &a.args {
+            let rest = arg.replace("{gameDir}", "");
+            if rest.contains('{') || rest.contains('}') {
+                errs.push(format!("activation arg {arg:?}: only {{gameDir}} can be filled in"));
+            }
+        }
+        if a.mode == ActivationMode::Args && a.args.is_empty() {
+            errs.push("an args pack needs \"args\" that point the game at its files".into());
+        }
     }
     let mut zip_names = std::collections::HashSet::new();
     for p in &mut m.patches {
         match safe_rel_path(&p.path) {
             Ok(rel) => {
-                if !seen.insert(rel.to_lowercase()) {
+                // An args pack writes a new file and leaves `path` alone, so only its `output` is taken.
+                if p.output.is_none() && !seen.insert(rel.to_lowercase()) {
                     errs.push(format!("duplicate path {rel} (a path is either in files or in patches, once)"));
                 }
                 p.path = rel;
             }
             Err(e) => errs.push(e),
         }
-        match safe_rel_path(&p.patch) {
-            Ok(rel) if rel.starts_with("patches/") && rel.len() > "patches/".len() => {
+        if let Some(o) = p.output.clone() {
+            match safe_rel_path(&o) {
+                Ok(rel) => {
+                    if rel.eq_ignore_ascii_case(&p.path) {
+                        errs.push(format!("patch output for {} must be a new file", p.path));
+                    } else if !seen.insert(rel.to_lowercase()) {
+                        errs.push(format!("duplicate path {rel}"));
+                    }
+                    p.output = Some(rel);
+                }
+                Err(e) => errs.push(e),
+            }
+            if mode != Some(ActivationMode::Args) || p.kind != PatchKind::Bsdiff {
+                errs.push(format!("patch \"output\" ({}) is for bsdiff patches in args packs", p.path));
+            }
+        } else if mode == Some(ActivationMode::Args) {
+            errs.push(format!("in an args pack, the patch for {} needs \"output\" (a new file), so the original stays untouched", p.path));
+        }
+        let field = if p.kind == PatchKind::Bsdiff { "patch" } else { "data" };
+        let other = if p.kind == PatchKind::Bsdiff { p.data.is_some() } else { p.patch.is_some() };
+        if other {
+            errs.push(format!("{field} patch for {} must use \"{field}\" only", p.path));
+        }
+        let entry = if p.kind == PatchKind::Bsdiff { &mut p.patch } else { &mut p.data };
+        match entry.as_deref().map(safe_rel_path) {
+            Some(Ok(rel)) if rel.starts_with("patches/") && rel.len() > "patches/".len() => {
                 if !zip_names.insert(rel.to_lowercase()) {
                     errs.push(format!("patch file {rel} is used twice"));
                 }
-                p.patch = rel;
+                *entry = Some(rel);
             }
-            Ok(rel) => errs.push(format!("patch file {rel} must be under patches/")),
-            Err(e) => errs.push(e),
+            Some(Ok(rel)) => errs.push(format!("patch file {rel} must be under patches/")),
+            Some(Err(e)) => errs.push(e),
+            None => errs.push(format!("patch for {} needs \"{field}\"", p.path)),
+        }
+        if p.kind == PatchKind::Append {
+            if p.from_size.is_none() {
+                errs.push(format!("append patch for {} needs \"fromSize\"", p.path));
+            }
+            if mode != Some(ActivationMode::Swap) {
+                errs.push(format!("append patch for {} is for swap packs only", p.path));
+            }
         }
         for (k, h) in [("fromSha256", &mut p.from_sha256), ("toSha256", &mut p.to_sha256)] {
             if !is_sha256(h) {
@@ -185,6 +323,10 @@ pub fn validate_manifest(mut m: Manifest) -> Result<Manifest, String> {
         if p.from_sha256 == p.to_sha256 {
             errs.push(format!("patch for {} changes nothing", p.path));
         }
+    }
+    let own = format!("{OWN_DIR}/");
+    if m.files.iter().map(|f| f.path.as_str()).chain(m.patches.iter().map(|p| p.target())).any(|p| p.to_lowercase().starts_with(&own)) {
+        errs.push(format!("{OWN_DIR}/ in the game folder belongs to the launcher"));
     }
     for gv in &mut m.game_versions {
         if gv.checks.is_empty() {

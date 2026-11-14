@@ -2,7 +2,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 
-export type Status = 'notFound' | 'noPack' | 'unavailable' | 'ready' | 'installed' | 'updateAvailable' | 'needsRepair'
+export type Status = 'notFound' | 'noPack' | 'unavailable' | 'ready' | 'installed' | 'updateAvailable' | 'needsRepair' | 'playing'
 
 export interface Pack {
   version: string
@@ -29,6 +29,8 @@ export interface Game {
   packError: string | null
   /** The game's program that is running now, if any. */
   running: string | null
+  /** Launch-only translation: Hebrew only when started from the launcher. */
+  launchOnly: 'args' | 'swap' | null
   needs: { message: string; url: string | null }[]
   installed: {
     version: string
@@ -68,6 +70,13 @@ export interface Progress {
   fraction: number | null
 }
 
+export interface Session {
+  gameId: string
+  state: 'started' | 'running' | 'restored' | 'restoreFailed' | 'neverStarted'
+  leftChanged?: string[]
+  error?: PackError
+}
+
 export interface UninstallResult {
   restored: string[]
   deleted: string[]
@@ -80,6 +89,10 @@ export const api = {
   install: (gameId: string, force = false) => invoke('install', { gameId, force }),
   update: (gameId: string, force = false) => invoke('update', { gameId, force }),
   uninstall: (gameId: string) => invoke<UninstallResult>('uninstall', { gameId }),
+  play: (gameId: string) => invoke<{ startingSteam: boolean; via: 'steam' | 'direct'; watched: boolean }>('play', { gameId }),
+  closeWhenGameExits: () => invoke('close_when_game_exits'),
+  onSession: (fn: (s: Session) => void) => listen<Session>('session', (e) => fn(e.payload)),
+  onCloseBlocked: (fn: () => void) => listen('close-blocked', () => fn()),
   pickFolder: (gameId: string) => invoke<string | null>('pick_folder', { gameId }),
   openFolder: (gameId: string) => invoke('open_folder', { gameId }),
   openUrl: (url: string) => invoke('open_url', { url }),
