@@ -64,7 +64,7 @@ export interface PackError {
 
 export interface Progress {
   gameId: string
-  step: 'download' | 'verify' | 'backup' | 'copy' | 'done'
+  step: 'download' | 'verify' | 'patch' | 'backup' | 'copy' | 'done'
   fraction: number | null
 }
 

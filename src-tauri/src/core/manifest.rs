@@ -8,6 +8,8 @@ use super::util::{compare_versions, resolve_inside, safe_rel_path, sha256_file_c
 
 pub const MANIFEST_NAME: &str = "tirgumim-pack.json";
 pub const SCHEMA: u32 = 1;
+/// The first launcher that applies `patches`. Older ones ignore the field, so a pack with patches must require this.
+pub const PATCHES_MIN_LAUNCHER: &str = "0.3.0";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -16,6 +18,21 @@ pub struct PackFile {
     pub sha256: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<u64>,
+}
+
+/// A game file changed in place with a bsdiff patch (BSDIFF40) instead of replaced, for big files such as a
+/// GameMaker `data.win`. The game's file must be exactly `from_sha256`; the result must be `to_sha256`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackPatch {
+    pub path: String,
+    pub from_sha256: String,
+    pub to_sha256: String,
+    /// The patched file's size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    /// The patch inside the pack zip, under `patches/`.
+    pub patch: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -77,7 +94,10 @@ pub struct Manifest {
     pub allow_unknown_game_version: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires: Vec<Require>,
+    #[serde(default)]
     pub files: Vec<PackFile>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub patches: Vec<PackPatch>,
 }
 
 pub fn is_sha256(s: &str) -> bool {
@@ -109,8 +129,8 @@ pub fn validate_manifest(mut m: Manifest) -> Result<Manifest, String> {
     if m.version.trim().is_empty() {
         errs.push("missing \"version\"".into());
     }
-    if m.files.is_empty() {
-        errs.push("\"files\" must not be empty".into());
+    if m.files.is_empty() && m.patches.is_empty() {
+        errs.push("\"files\" and \"patches\" must not both be empty".into());
     }
     let mut seen = std::collections::HashSet::new();
     for f in &mut m.files {
@@ -131,6 +151,40 @@ pub fn validate_manifest(mut m: Manifest) -> Result<Manifest, String> {
             errs.push(format!("bad sha256 for {}", f.path));
         }
         f.sha256 = f.sha256.to_lowercase();
+    }
+    if !m.patches.is_empty() && m.min_launcher_version.as_deref().is_none_or(|v| compare_versions(v, PATCHES_MIN_LAUNCHER).is_lt()) {
+        errs.push(format!("a pack with \"patches\" needs \"minLauncherVersion\" {PATCHES_MIN_LAUNCHER} or newer"));
+    }
+    let mut zip_names = std::collections::HashSet::new();
+    for p in &mut m.patches {
+        match safe_rel_path(&p.path) {
+            Ok(rel) => {
+                if !seen.insert(rel.to_lowercase()) {
+                    errs.push(format!("duplicate path {rel} (a path is either in files or in patches, once)"));
+                }
+                p.path = rel;
+            }
+            Err(e) => errs.push(e),
+        }
+        match safe_rel_path(&p.patch) {
+            Ok(rel) if rel.starts_with("patches/") && rel.len() > "patches/".len() => {
+                if !zip_names.insert(rel.to_lowercase()) {
+                    errs.push(format!("patch file {rel} is used twice"));
+                }
+                p.patch = rel;
+            }
+            Ok(rel) => errs.push(format!("patch file {rel} must be under patches/")),
+            Err(e) => errs.push(e),
+        }
+        for (k, h) in [("fromSha256", &mut p.from_sha256), ("toSha256", &mut p.to_sha256)] {
+            if !is_sha256(h) {
+                errs.push(format!("bad {k} for patch {}", p.path));
+            }
+            *h = h.to_lowercase();
+        }
+        if p.from_sha256 == p.to_sha256 {
+            errs.push(format!("patch for {} changes nothing", p.path));
+        }
     }
     for gv in &mut m.game_versions {
         if gv.checks.is_empty() {

@@ -68,6 +68,8 @@ The zip's SHA-256 is checked after download, before anything is extracted.
 tirgumim-pack.json
 files/
   <paths exactly as they go under the game root>
+patches/              (optional)
+  <game path>.bsdiff
 ```
 
 ### Manifest (`tirgumim-pack.json`)
@@ -115,6 +117,29 @@ Rules:
 - Each file is either **added** (didn't exist) or **replaced** (existed — original is
   backed up first). The launcher decides this at install time; the pack doesn't say.
 
+### Binary patches (`patches`, launcher 0.3.0+)
+
+For a big game file that only needs some bytes changed (a GameMaker `data.win`), a pack can carry a
+bsdiff patch instead of the whole file, so it ships no copy of the game's own data:
+
+```json
+"patches": [
+  { "path": "data.win", "fromSha256": "…", "toSha256": "…", "size": 123456789, "patch": "patches/data.win.bsdiff" }
+]
+```
+
+- `path`: the game file (same rules as `files`; a path is in `files` or `patches`, not both). `patch`: the
+  patch inside the zip, under `patches/`. Format: **BSDIFF40** (classic bsdiff 4 with bzip2; the `bsdiff` tool and
+  the Rust `qbsdiff` crate both write it).
+- `fromSha256` is the untouched game file. If the game's file is anything else (another game build, or already
+  patched), the install is refused with `PATCH_SOURCE`, even when forced: a patch only fits its exact original.
+- The patch is applied in memory in a temp folder and the result checked against `toSha256`
+  (`PATCH_FAILED` otherwise) before anything in the game changes. Then the patched file goes in like a replaced
+  one: original backed up, uninstall restores it, a game update that replaced it is left alone.
+- `files` may be empty when `patches` isn't. A pack with `patches` must have `minLauncherVersion` 0.3.0 or newer:
+  older launchers don't know the field and would skip it. make-pack sets this.
+- Patching holds the original and the result in memory (a few hundred MB for a big `data.win` is fine).
+
 ## 4. Install / update / uninstall
 
 State lives in `%APPDATA%\Tirgumim Launcher\` (`state.json` + `backups\<gameId>\…`).
@@ -122,8 +147,8 @@ State lives in `%APPDATA%\Tirgumim Launcher\` (`state.json` + `backups\<gameId>\
 **Install**
 0. Refused while one of the game's `processNames` runs, or while catalog `requires` aren't met.
 1. Download zip → verify zip SHA-256 → read & validate manifest.
-2. Check `gameId`, launcher version, game version, manifest `requires`.
-3. Extract to a temp folder, verify every file's hash.
+2. Check `gameId`, launcher version, game version, that each patched file is its `fromSha256` original, manifest `requires`.
+3. Extract to a temp folder, verify every file's hash; make each patched file there and verify its `toSha256`.
 4. For each file: if the target exists, copy it to `backups\<gameId>\<path>`.
 5. Copy pack files into the game folder.
 6. Write the install record (pack version, game dir, each file's hash, whether it

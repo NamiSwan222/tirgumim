@@ -6,6 +6,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 
 use super::manifest::{self, MANIFEST_NAME};
 use super::util::{self, sha256_file};
@@ -32,14 +33,22 @@ pub struct MadePack {
 
 /// Builds a pack from `pack.config.json` (every manifest field except `files`, plus `filesDir`). A game-version
 /// check with only a `path` gets its sha256 and size from `game_dir`, an untouched install of that game build.
+///
+/// `patches` in the config: `[{ "path": "data.win", "patched": "work/data.win" }]` (our changed copy of the game
+/// file; the bsdiff is made from `game_dir`'s original) or `{ "path", "patchFile": "x.bsdiff" }` (a ready bsdiff,
+/// checked against the original). Paths are relative to the config. Hashes, size and `minLauncherVersion` are filled in.
 pub fn make_pack(config: &Path, game_dir: Option<&Path>, out: Option<&Path>, url: Option<&str>) -> Result<MadePack, String> {
     let cfg_dir = config.parent().unwrap_or(Path::new("."));
     let text = fs::read_to_string(config).map_err(|e| format!("{}: {e}", config.display()))?;
     let mut cfg: Map<String, Value> = serde_json::from_str(util::strip_bom(&text)).map_err(|e| format!("{}: {e}", config.display()))?;
     let files_dir = cfg_dir.join(cfg.remove("filesDir").and_then(|v| v.as_str().map(str::to_string)).unwrap_or_else(|| "files".into()));
 
+    let patch_cfg = cfg.remove("patches");
     let mut rels = Vec::new();
-    walk(&files_dir, &files_dir, &mut rels).map_err(|e| format!("{}: {e}", files_dir.display()))?;
+    // A pack can be patches only, with no files folder.
+    if files_dir.exists() || patch_cfg.is_none() {
+        walk(&files_dir, &files_dir, &mut rels).map_err(|e| format!("{}: {e}", files_dir.display()))?;
+    }
     rels.sort();
     let mut files = Vec::new();
     for rel in &rels {
@@ -64,10 +73,57 @@ pub fn make_pack(config: &Path, game_dir: Option<&Path>, out: Option<&Path>, url
         }
     }
 
+    let mut patches = Vec::new();
+    let mut patch_blobs: Vec<(String, Vec<u8>)> = Vec::new();
+    for p in patch_cfg.as_ref().and_then(Value::as_array).cloned().unwrap_or_default() {
+        let path = p.get("path").and_then(Value::as_str).ok_or("Every patch needs \"path\"")?.to_string();
+        let gd = game_dir.ok_or(format!("Patch \"{path}\" needs --game-dir (an untouched install) to read the original"))?;
+        let orig_path = util::resolve_inside(gd, &path)?;
+        let orig = fs::read(&orig_path).map_err(|e| format!("{}: {e}", orig_path.display()))?;
+        let local = |k: &str| p.get(k).and_then(Value::as_str).map(|r| cfg_dir.join(r));
+        let (diff, out) = match (local("patched"), local("patchFile")) {
+            (Some(changed), None) => {
+                let target = fs::read(&changed).map_err(|e| format!("{}: {e}", changed.display()))?;
+                let mut diff = Vec::new();
+                qbsdiff::Bsdiff::new(&orig, &target).compare(std::io::Cursor::new(&mut diff)).map_err(|e| format!("bsdiff for {path}: {e}"))?;
+                // Prove the patch gives back exactly our file before it goes in the pack.
+                let back = super::installer::apply_patch(&orig, &diff).map_err(|e| format!("patch for {path}: {e}"))?;
+                if back != target {
+                    return Err(format!("The patch for {path} does not rebuild the changed file"));
+                }
+                (diff, target)
+            }
+            (None, Some(pf)) => {
+                let diff = fs::read(&pf).map_err(|e| format!("{}: {e}", pf.display()))?;
+                let out = super::installer::apply_patch(&orig, &diff).map_err(|e| format!("{} does not apply to {path}: {e}", pf.display()))?;
+                (diff, out)
+            }
+            _ => return Err(format!("Patch \"{path}\" needs exactly one of \"patched\" or \"patchFile\"")),
+        };
+        let zip_name = format!("patches/{}.bsdiff", util::safe_rel_path(&path)?);
+        patches.push(json!({
+            "path": path,
+            "fromSha256": util::hex(&Sha256::digest(&orig)),
+            "toSha256": util::hex(&Sha256::digest(&out)),
+            "size": out.len(),
+            "patch": zip_name,
+        }));
+        patch_blobs.push((zip_name, diff));
+    }
+    if !patches.is_empty() {
+        let min = cfg.get("minLauncherVersion").and_then(Value::as_str).unwrap_or("0");
+        if util::compare_versions(min, manifest::PATCHES_MIN_LAUNCHER).is_lt() {
+            cfg.insert("minLauncherVersion".into(), json!(manifest::PATCHES_MIN_LAUNCHER));
+        }
+    }
+
     let mut m = Map::new();
     m.insert("schema".into(), json!(manifest::SCHEMA));
     m.extend(cfg);
     m.insert("files".into(), Value::Array(files));
+    if !patches.is_empty() {
+        m.insert("patches".into(), Value::Array(patches));
+    }
     let manifest_json = Value::Object(m);
     let parsed: manifest::Manifest = serde_json::from_value(manifest_json.clone()).map_err(|e| format!("Invalid pack manifest: {e}"))?;
     let parsed = manifest::validate_manifest(parsed)?;
@@ -85,6 +141,12 @@ pub fn make_pack(config: &Path, game_dir: Option<&Path>, out: Option<&Path>, url
         for rel in &rels {
             z.start_file(format!("files/{rel}"), opt).map_err(|e| e.to_string())?;
             z.write_all(&fs::read(files_dir.join(rel)).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        }
+        // bsdiff output is already bzip2-compressed.
+        let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored).large_file(true);
+        for (name, diff) in &patch_blobs {
+            z.start_file(name.as_str(), stored).map_err(|e| e.to_string())?;
+            z.write_all(diff).map_err(|e| e.to_string())?;
         }
         z.finish().map_err(|e| e.to_string())?;
     }

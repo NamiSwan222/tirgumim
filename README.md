@@ -60,6 +60,14 @@ release with a checksum, the tests, and the window build. Pack releases in this 
 2. Write `mypack/pack.config.json` (every manifest field except `files`, plus `filesDir`).
    See `dev/sample-pack/pack.config.json`.
 3. `npm run make-pack -- mypack/pack.config.json --game-dir "<clean game install>" --out out/pack.zip`
+
+   **Patching a big game file instead of shipping it** (e.g. a GameMaker `data.win`): add to the config
+   `"patches": [{ "path": "data.win", "patched": "work/data.win" }]`, where `work/data.win` is your changed copy
+   (relative to the config). make-pack reads the original from `--game-dir`, writes a bsdiff into the pack, checks
+   that it rebuilds your file exactly, and fills in the hashes and `minLauncherVersion` (0.3.0). If you already
+   have a bsdiff (BSDIFF40), use `"patchFile": "work/data.win.bsdiff"` instead. The `files/` folder is optional
+   then. See DESIGN.md, "Binary patches". Making the bsdiff of a file of a few hundred MB takes a while and
+   several GB of memory.
 4. Publish it. Either:
    - **GitHub release (easiest):** upload the zip to a release on `NamiSwan222/tirgumim` with a tag like
      `mygame-0.1.0`. If the game's catalog entry has `"pack": { "github": "NamiSwan222/tirgumim", "tag": "mygame-*", "asset": "mygame-he-*.zip" }`,

@@ -56,6 +56,9 @@ pub struct RecordFile {
     pub path: String,
     pub sha256: String,
     pub backed_up: bool,
+    /// Changed in place by a bsdiff patch (the original is in the backup).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub patched: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -189,8 +192,9 @@ impl Installer {
         Ok(OpenPack { manifest, archive })
     }
 
-    /// Unpacks the files the manifest lists into a temporary folder and checks each one's hash.
-    fn extract_verified(&self, pack: &mut OpenPack) -> Result<PathBuf> {
+    /// Unpacks the files the manifest lists into a temporary folder and checks each one's hash. Patched files are
+    /// made there too, from the game's originals, and checked against `toSha256`. The game folder isn't touched.
+    fn extract_verified(&self, pack: &mut OpenPack, game_dir: &Path, progress: &mut dyn FnMut(&str)) -> Result<PathBuf> {
         let tmp = self.data_dir.join("tmp").join(util::unique_name());
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp)?;
@@ -224,6 +228,27 @@ impl Installer {
                     return Err(PackError::new("FILE_HASH", format!("File {} in pack is corrupt", f.path)));
                 }
             }
+            if !pack.manifest.patches.is_empty() {
+                progress("patch");
+            }
+            for p in &pack.manifest.patches {
+                let mut diff = Vec::new();
+                match by_name.get(&p.patch).copied().map(|i| pack.archive.by_index(i)) {
+                    Some(Ok(mut e)) if !e.is_dir() => {
+                        e.read_to_end(&mut diff).map_err(|e| PackError::new("ZIP_READ", e.to_string()))?;
+                    }
+                    _ => return Err(PackError::new("MISSING_FILE", format!("Pack is missing patch {}", p.patch))),
+                }
+                let src = fs::read(resolve_inside(game_dir, &p.path).map_err(|e| PackError::new("BAD_MANIFEST", e))?)?;
+                let out = apply_patch(&src, &diff).map_err(|e| PackError::new("PATCH_FAILED", format!("Patch for {} failed: {e}", p.path)))?;
+                drop(src);
+                if util::hex(&Sha256::digest(&out)) != p.to_sha256 {
+                    return Err(PackError::new("PATCH_FAILED", format!("Patch for {} gave the wrong result", p.path)));
+                }
+                let dest = resolve_inside(&tmp, &p.path).map_err(|e| PackError::new("BAD_MANIFEST", e))?;
+                fs::create_dir_all(dest.parent().unwrap())?;
+                fs::write(&dest, &out)?;
+            }
             Ok(())
         })();
         match res {
@@ -248,6 +273,21 @@ impl Installer {
             e.allow_unknown = gv.allow_unknown;
             return Err(e);
         }
+        // A patch only works on the exact original file, so this holds even for a forced install.
+        let wrong: Vec<String> = m
+            .patches
+            .iter()
+            .filter(|p| {
+                let abs = resolve_inside(game_dir, &p.path).ok().filter(|a| a.is_file());
+                abs.and_then(|a| sha256_file_cached(&a).ok()).as_deref() != Some(p.from_sha256.as_str())
+            })
+            .map(|p| p.path.clone())
+            .collect();
+        if !wrong.is_empty() {
+            let mut e = PackError::new("PATCH_SOURCE", format!("Not the original game file: {}", wrong.join(", ")));
+            e.details = wrong;
+            return Err(e);
+        }
         let unmet = manifest::unmet_requires(&m.requires, game_dir);
         if !unmet.is_empty() {
             let mut e = PackError::new("REQUIRES", format!("Game folder is missing: {}", unmet.iter().map(|r| r.path.as_str()).collect::<Vec<_>>().join(", ")));
@@ -270,7 +310,7 @@ impl Installer {
         progress("verify");
         let mut pack = self.open_pack(o.zip_path, o.expected_sha256)?;
         let gv = self.check_pack(&pack.manifest, o.game_id, o.game_dir, o.force)?;
-        let tmp = self.extract_verified(&mut pack)?;
+        let tmp = self.extract_verified(&mut pack, o.game_dir, progress)?;
         let res = self.copy_in(o, &pack.manifest, &gv, &tmp, progress);
         let _ = fs::remove_dir_all(&tmp);
         res
@@ -287,27 +327,29 @@ impl Installer {
         let res = (|| {
             progress("backup");
             let mut plan = Vec::new();
-            for f in &m.files {
-                let abs = resolve_inside(o.game_dir, &f.path).map_err(|e| PackError::new("BAD_MANIFEST", e))?;
+            // Patched files go in like replaced ones: the original is backed up, the made file copied over it.
+            let entries = m.files.iter().map(|f| (&f.path, &f.sha256, false)).chain(m.patches.iter().map(|p| (&p.path, &p.to_sha256, true)));
+            for (path, sha256, patched) in entries {
+                let abs = resolve_inside(o.game_dir, path).map_err(|e| PackError::new("BAD_MANIFEST", e))?;
                 let backup = if abs.exists() {
                     if abs.is_dir() {
-                        return Err(PackError::new("IS_DIR", format!("{} is a folder in the game", f.path)));
+                        return Err(PackError::new("IS_DIR", format!("{path} is a folder in the game")));
                     }
-                    let b = resolve_inside(&bdir, &f.path).map_err(|e| PackError::new("BAD_MANIFEST", e))?;
+                    let b = resolve_inside(&bdir, path).map_err(|e| PackError::new("BAD_MANIFEST", e))?;
                     fs::create_dir_all(b.parent().unwrap())?;
                     fs::copy(&abs, &b)?;
                     Some(b)
                 } else {
                     None
                 };
-                plan.push((f, abs, backup));
+                plan.push((path, sha256, patched, abs, backup));
             }
             progress("copy");
             let mut files = Vec::new();
-            for (f, abs, backup) in plan {
+            for (path, sha256, patched, abs, backup) in plan {
                 mkdir_tracked(o.game_dir, abs.parent().unwrap(), &mut created)?;
-                fs::copy(resolve_inside(tmp, &f.path).unwrap(), &abs)?;
-                files.push(RecordFile { path: f.path.clone(), sha256: f.sha256.clone(), backed_up: backup.is_some() });
+                fs::copy(resolve_inside(tmp, path).unwrap(), &abs)?;
+                files.push(RecordFile { path: path.clone(), sha256: sha256.clone(), backed_up: backup.is_some(), patched });
                 done.push((abs, backup));
             }
             let rec = InstallRecord {
@@ -421,6 +463,13 @@ impl Installer {
             _ => false,
         }
     }
+}
+
+/// Applies a BSDIFF40 patch (classic bsdiff 4 with bzip2) to `src`.
+pub fn apply_patch(src: &[u8], patch: &[u8]) -> std::io::Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(src.len());
+    qbsdiff::Bspatch::new(patch)?.apply(src, std::io::Cursor::new(&mut out))?;
+    Ok(out)
 }
 
 fn mkdir_tracked(root: &Path, dir: &Path, created: &mut Vec<PathBuf>) -> Result<()> {

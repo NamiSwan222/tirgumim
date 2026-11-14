@@ -21,6 +21,7 @@ export const SOURCE: Record<string, string> = {
 export const STEP: Record<string, string> = {
   download: 'מוריד את התרגום…',
   verify: 'בודק את החבילה…',
+  patch: 'מכין את הקבצים המתורגמים…',
   backup: 'מגבה את הקבצים המקוריים…',
   copy: 'מתקין קבצים…',
   done: 'הסתיים',
@@ -46,6 +47,8 @@ const ERRORS: Record<string, string> = {
   GAME_VERSION: 'גרסת המשחק שלכם אינה נתמכת בתרגום הזה.',
   GAME_RUNNING: 'המשחק פתוח. סגרו אותו ונסו שוב.',
   REQUIRES: 'חסר משהו בתיקיית המשחק:',
+  PATCH_SOURCE: 'קבצי המשחק שלכם שונים מאלה שהתרגום הוכן עבורם (גרסה אחרת, או קובץ ששונה כבר). אמתו את קבצי המשחק ב-Steam או ב-Epic ונסו שוב. הקבצים:',
+  PATCH_FAILED: 'לא הצלחנו להחיל את התרגום על קבצי המשחק. לא שונה דבר במשחק.',
   NO_GAME_DIR: 'תיקיית המשחק לא נמצאה.',
   NOT_GAME_DIR: 'התיקייה שבחרתם אינה תיקיית המשחק.',
   ALREADY_INSTALLED: 'כבר מותקן תרגום למשחק הזה.',
@@ -61,7 +64,7 @@ const ERRORS: Record<string, string> = {
 
 export function errorText(e: PackError): string {
   const base = ERRORS[e.code] ?? 'אירעה שגיאה.'
-  if (e.code === 'REQUIRES' && e.details?.length) return `${base} ${e.details.join(' · ')}`
+  if ((e.code === 'REQUIRES' || e.code === 'PATCH_SOURCE') && e.details?.length) return `${base} ${e.details.join(' · ')}`
   return e.code in ERRORS ? base : `${base} (${e.message})`
 }
 

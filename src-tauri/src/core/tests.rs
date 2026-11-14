@@ -232,3 +232,172 @@ fn required_files_block_the_install_until_they_are_there() {
     let absent = [Require { path: "loader/core.dll".into(), message: "remove it".into(), absent: true, url: None }];
     assert_eq!(manifest::unmet_requires(&absent, &s.game).len(), 1);
 }
+
+// ---------- binary patches (bsdiff) ----------
+
+/// Bytes that look like a game data file (not compressible).
+fn noise(n: usize, seed: u32) -> Vec<u8> {
+    let mut x = seed;
+    (0..n)
+        .map(|_| {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            x as u8
+        })
+        .collect()
+}
+
+struct PatchSetup {
+    s: Setup,
+    clean: PathBuf,
+    original: Vec<u8>,
+    changed: Vec<u8>,
+}
+
+/// A clean game (the sample game plus a 300 KB `data.win`), a copy to install into, and our changed `data.win`.
+fn patch_setup() -> PatchSetup {
+    let mut s = setup();
+    s.inst = Installer::new(s.root.join("data"), manifest::PATCHES_MIN_LAUNCHER);
+    let clean = s.root.join("clean");
+    copy_dir(&dev().join("sample-game-template"), &clean).unwrap();
+    let original = noise(300_000, 7);
+    let mut changed = original.clone();
+    for i in (1000..changed.len() - 64).step_by(4096) {
+        changed[i..i + 64].copy_from_slice(&[0xd7; 64]);
+    }
+    changed.extend_from_slice("עברית".as_bytes());
+    fs::write(clean.join("data.win"), &original).unwrap();
+    fs::write(s.game.join("data.win"), &original).unwrap();
+    PatchSetup { s, clean, original, changed }
+}
+
+fn build_patch_pack(p: &PatchSetup, name: &str, patch: serde_json::Value) -> Result<(PathBuf, serde_json::Value), String> {
+    let src = p.s.root.join(format!("packsrc-{name}"));
+    let _ = fs::remove_dir_all(&src);
+    copy_dir(&dev().join("sample-pack"), &src).unwrap();
+    fs::write(src.join("data.win.changed"), &p.changed).unwrap();
+    edit_config(&src, |v| v["patches"] = serde_json::json!([patch]));
+    let made = make_pack(&src.join("pack.config.json"), Some(&p.clean), Some(&p.s.root.join(format!("{name}.zip"))), None)?;
+    Ok((made.out, made.manifest))
+}
+
+#[test]
+fn patch_install_then_uninstall_leaves_the_game_byte_identical() {
+    let p = patch_setup();
+    let before = tree(&p.s.game);
+    let (zip, m) = build_patch_pack(&p, "patch", serde_json::json!({ "path": "data.win", "patched": "data.win.changed" })).unwrap();
+    assert_eq!(m["minLauncherVersion"], manifest::PATCHES_MIN_LAUNCHER);
+    assert_eq!(m["patches"][0]["patch"], "patches/data.win.bsdiff");
+    assert_eq!(m["patches"][0]["size"], p.changed.len());
+
+    let mut steps = Vec::new();
+    let rec = p.s.inst.install(&opts(&p.s, &zip, None, false), &mut |st| steps.push(st.to_string())).unwrap();
+    assert!(steps.iter().any(|s| s == "patch"));
+    assert_eq!(fs::read(p.s.game.join("data.win")).unwrap(), p.changed, "the patch must give exactly our file");
+    assert!(read(&p.s.game.join("data/strings.txt")).contains("התחל משחק"), "files and patches go in together");
+    let f = rec.files.iter().find(|f| f.path == "data.win").unwrap();
+    assert!(f.patched && f.backed_up);
+    assert!(p.s.inst.verify("sample-game").unwrap().intact);
+
+    let r = p.s.inst.uninstall("sample-game").unwrap();
+    assert!(r.restored.iter().any(|x| x == "data.win"));
+    assert_eq!(tree(&p.s.game), before, "game folder must be exactly as it was");
+    assert_eq!(fs::read(p.s.game.join("data.win")).unwrap(), p.original);
+}
+
+#[test]
+fn patch_refuses_a_file_that_is_not_the_original_even_forced() {
+    let p = patch_setup();
+    let (zip, _) = build_patch_pack(&p, "patch", serde_json::json!({ "path": "data.win", "patched": "data.win.changed" })).unwrap();
+    let mut other = p.original.clone();
+    other[10] ^= 1;
+    fs::write(p.s.game.join("data.win"), &other).unwrap();
+    let before = tree(&p.s.game);
+    for force in [false, true] {
+        let e = p.s.inst.install(&opts(&p.s, &zip, None, force), &mut |_| {}).unwrap_err();
+        assert_eq!((e.code.as_str(), e.details.clone()), ("PATCH_SOURCE", vec!["data.win".to_string()]));
+    }
+    assert_eq!(tree(&p.s.game), before, "nothing in the game may change");
+    // Already patched counts as "not the original" too.
+    fs::write(p.s.game.join("data.win"), &p.changed).unwrap();
+    assert_eq!(p.s.inst.install(&opts(&p.s, &zip, None, false), &mut |_| {}).unwrap_err().code, "PATCH_SOURCE");
+    assert!(p.s.inst.record("sample-game").is_none());
+}
+
+#[test]
+fn patch_from_a_ready_bsdiff_file_and_bad_ones_are_refused() {
+    let p = patch_setup();
+    let mut diff = Vec::new();
+    qbsdiff::Bsdiff::new(&p.original, &p.changed).compare(std::io::Cursor::new(&mut diff)).unwrap();
+    let dir = p.s.root.join("ready");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("x.bsdiff"), &diff).unwrap();
+    fs::write(dir.join("bad.bsdiff"), b"not a bsdiff").unwrap();
+    // patchFile is relative to the config; an absolute path works too.
+    let pf = dir.join("x.bsdiff").to_string_lossy().into_owned();
+    let bad = dir.join("bad.bsdiff").to_string_lossy().into_owned();
+    let (zip, _) = build_patch_pack(&p, "ready", serde_json::json!({ "path": "data.win", "patchFile": pf })).unwrap();
+    p.s.inst.install(&opts(&p.s, &zip, None, false), &mut |_| {}).unwrap();
+    assert_eq!(fs::read(p.s.game.join("data.win")).unwrap(), p.changed);
+
+    assert!(build_patch_pack(&p, "bad", serde_json::json!({ "path": "data.win", "patchFile": bad })).is_err());
+    assert!(build_patch_pack(&p, "both", serde_json::json!({ "path": "data.win", "patched": "data.win.changed", "patchFile": pf })).is_err());
+    assert!(build_patch_pack(&p, "missing", serde_json::json!({ "path": "nope.win", "patched": "data.win.changed" })).is_err());
+}
+
+#[test]
+fn a_corrupt_patch_in_the_pack_changes_nothing() {
+    use std::io::Read;
+    let p = patch_setup();
+    let (good, m) = build_patch_pack(&p, "patch", serde_json::json!({ "path": "data.win", "patched": "data.win.changed" })).unwrap();
+    // Same manifest, but the patch inside the zip is cut short.
+    let mut diff = Vec::new();
+    zip::ZipArchive::new(fs::File::open(&good).unwrap()).unwrap().by_name("patches/data.win.bsdiff").unwrap().read_to_end(&mut diff).unwrap();
+    diff.truncate(diff.len() / 2);
+    let mut entries: Vec<(String, Vec<u8>)> = m["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| {
+            let path = f["path"].as_str().unwrap();
+            (format!("files/{path}"), fs::read(dev().join("sample-pack/files").join(path)).unwrap())
+        })
+        .collect();
+    entries.push(("patches/data.win.bsdiff".into(), diff));
+    let refs: Vec<(&str, &[u8])> = entries.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
+    let zip = raw_zip(&p.s.root, &m, &refs);
+    let before = tree(&p.s.game);
+    assert_eq!(p.s.inst.install(&opts(&p.s, &zip, None, false), &mut |_| {}).unwrap_err().code, "PATCH_FAILED");
+    assert_eq!(tree(&p.s.game), before);
+    assert!(p.s.inst.record("sample-game").is_none());
+}
+
+#[test]
+fn patch_manifest_rules() {
+    let h = |c: char| c.to_string().repeat(64);
+    let base = |patch: &serde_json::Value, min: &str| {
+        serde_json::json!({
+            "schema": 1, "packId": "p", "gameId": "g", "version": "1", "minLauncherVersion": min,
+            "files": [], "patches": [patch]
+        })
+    };
+    let parse = |v: serde_json::Value| manifest::parse_manifest(&v.to_string());
+    let ok = serde_json::json!({ "path": "data.win", "fromSha256": h('a'), "toSha256": h('b'), "patch": "patches/data.win.bsdiff" });
+    assert!(parse(base(&ok, "0.3.0")).is_ok(), "patches alone are a valid pack");
+    assert!(parse(base(&ok, "0.2.0")).is_err(), "older launchers would skip the patch");
+    for (k, v) in [("patch", "data.win.bsdiff"), ("path", "../x"), ("toSha256", h('a').as_str())] {
+        let mut bad = ok.clone();
+        bad[k] = v.into();
+        assert!(parse(base(&bad, "0.3.0")).is_err(), "{k} = {v} must be refused");
+    }
+    let mut both = base(&ok, "0.3.0");
+    both["files"] = serde_json::json!([{ "path": "DATA.win", "sha256": h('c') }]);
+    assert!(parse(both).is_err(), "a path is in files or patches, not both");
+
+    // A launcher that is too old says so, before anything else.
+    let p = patch_setup();
+    let (zip, _) = build_patch_pack(&p, "patch", serde_json::json!({ "path": "data.win", "patched": "data.win.changed" })).unwrap();
+    let old = Installer::new(p.s.root.join("old"), "0.2.0");
+    assert_eq!(old.install(&opts(&p.s, &zip, None, false), &mut |_| {}).unwrap_err().code, "LAUNCHER_TOO_OLD");
+}
