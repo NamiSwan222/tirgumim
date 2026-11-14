@@ -554,6 +554,45 @@ fn swap_keeps_a_file_the_game_updated_while_playing_and_refuses_a_changed_game()
     assert!(!swap::is_active(g));
 }
 
+/// The Yu-Gi-Oh shape: a proxy DLL that only acts with an env var, and Hebrew copies of the data files made on the
+/// player's PC from their originals (append into a new file), so no original is ever touched.
+#[test]
+fn env_pack_with_derived_copies_never_touches_originals() {
+    let p = launch_setup();
+    let act = serde_json::json!({ "mode": "args", "exe": "SampleGame.exe", "env": { "TIRGUMIM_LANG": "he" }, "via": "direct", "needsSteam": true });
+    let (_, _) = launch_pack(&p, "env", act, serde_json::json!([
+        { "path": "big.dat", "kind": "append", "appendFile": "big.append", "output": "tirgumim/he/big.dat" },
+        { "path": "data.win", "patched": "data.win.changed", "output": "tirgumim/he/data.win" }
+    ]))
+    .unwrap();
+    // The sample pack's files replace game files; this pack only adds a "DLL".
+    let src = p.s.root.join("packsrc-env");
+    fs::remove_dir_all(src.join("files")).unwrap();
+    fs::create_dir_all(src.join("files")).unwrap();
+    fs::write(src.join("files/xinput9_1_0.dll"), b"proxy").unwrap();
+    let made = make_pack(&src.join("pack.config.json"), Some(&p.clean), Some(&p.s.root.join("env2.zip")), None).unwrap();
+    assert_eq!(made.manifest["patches"][0]["output"], "tirgumim/he/big.dat");
+
+    let before = tree(&p.s.game);
+    let rec = p.s.inst.install(&opts(&p.s, &made.out, None, false), &mut |_| {}).unwrap();
+    let after = tree(&p.s.game);
+    for (k, v) in &before {
+        assert_eq!(after.get(k), Some(v), "{k} must not change");
+    }
+    let mut want = fs::read(p.clean.join("big.dat")).unwrap();
+    want.extend(noise(50_000, 99));
+    assert_eq!(fs::read(p.s.game.join("tirgumim/he/big.dat")).unwrap(), want);
+    assert_eq!(fs::read(p.s.game.join("tirgumim/he/data.win")).unwrap(), p.changed);
+    assert!(p.s.game.join("xinput9_1_0.dll").is_file());
+    let a = rec.activation.unwrap();
+    assert_eq!(a.env.get("TIRGUMIM_LANG").map(String::as_str), Some("he"));
+    assert!(a.needs_steam);
+    assert!(p.s.inst.verify("sample-game").unwrap().intact);
+
+    p.s.inst.uninstall("sample-game").unwrap();
+    assert_eq!(tree(&p.s.game), before, "uninstall removes the DLL and the copies, nothing else");
+}
+
 /// The whole play loop with a real program standing in for the game: swap in, start it directly, see it in the
 /// process list, see it gone, restore.
 #[cfg(windows)]

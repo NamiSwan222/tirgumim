@@ -64,6 +64,7 @@ const ERRORS: Record<string, string> = {
   GAME_ALREADY_RUNNING: 'המשחק כבר פתוח (כנראה הופעל מ-Steam). סגרו אותו ולחצו שוב על "שחק בעברית".',
   SESSION_ACTIVE: 'המשחק כבר פועל בעברית.',
   STEAM_MISSING: 'Steam לא מותקן במחשב הזה. כדי לשחק בעברית צריך להתקין את Steam ולהתחבר אליו.',
+  STEAM_NOT_RUNNING: 'המשחק צריך ש-Steam יהיה פתוח. פתחו את Steam, התחברו, ולחצו שוב על "שחק בעברית".',
   STEAM_NO_APPID: 'חסרים פרטי Steam למשחק הזה ברשימת התרגומים.',
   EXE_MISSING: 'קובץ ההפעלה של המשחק לא נמצא בתיקיית המשחק.',
   LAUNCH_FAILED: 'לא הצלחנו להפעיל את המשחק.',

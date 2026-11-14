@@ -244,6 +244,19 @@ impl Installer {
                     _ => return Err(PackError::new("MISSING_FILE", format!("Pack is missing patch {}", p.zip_entry()))),
                 };
                 let original = resolve_inside(game_dir, &p.path).map_err(|e| PackError::new("BAD_MANIFEST", e))?;
+                if p.kind == PatchKind::Append && p.output.is_some() {
+                    // Args pack: a new file = the original followed by the data, streamed (no RAM), hashed as written.
+                    let dest = resolve_inside(&tmp, p.target()).map_err(|e| PackError::new("BAD_MANIFEST", e))?;
+                    fs::create_dir_all(dest.parent().unwrap())?;
+                    let mut w = HashWriter { inner: io::BufWriter::new(fs::File::create(&dest)?), hash: Sha256::new() };
+                    io::copy(&mut fs::File::open(&original)?, &mut w)?;
+                    io::copy(&mut entry, &mut w).map_err(|e| PackError::new("ZIP_READ", e.to_string()))?;
+                    w.inner.flush()?;
+                    if util::hex(&w.hash.finalize()) != p.to_sha256 {
+                        return Err(PackError::new("PATCH_FAILED", format!("Patch for {} gave the wrong result", p.path)));
+                    }
+                    continue;
+                }
                 if p.kind == PatchKind::Append {
                     // Kept as it is (the bytes to add); the result is checked without writing a 1 GB file:
                     // the hash of the original followed by these bytes must be toSha256.
@@ -371,7 +384,11 @@ impl Installer {
             let mut files = Vec::new();
             for (path, src, sha256, patched, abs, backup) in plan {
                 mkdir_tracked(o.game_dir, abs.parent().unwrap(), &mut created)?;
-                fs::copy(resolve_inside(tmp, src).unwrap(), &abs)?;
+                // Move when the temp folder is on the game's drive (a 1 GB derived file isn't copied twice).
+                let from = resolve_inside(tmp, src).unwrap();
+                if fs::rename(&from, &abs).is_err() {
+                    fs::copy(&from, &abs)?;
+                }
                 files.push(RecordFile { path: path.clone(), sha256: sha256.clone(), backed_up: backup.is_some(), patched });
                 done.push((abs, backup));
             }
@@ -541,6 +558,22 @@ fn plan_entries(game: &Path, m: &Manifest, tmp: &Path) -> Result<(Vec<(String, S
         }
     }
     Ok((out, items))
+}
+
+/// Writes through and hashes what passes.
+struct HashWriter<W: Write> {
+    inner: W,
+    hash: Sha256,
+}
+impl<W: Write> Write for HashWriter<W> {
+    fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+        let n = self.inner.write(b)?;
+        self.hash.update(&b[..n]);
+        Ok(n)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
 }
 
 /// Applies a BSDIFF40 patch (classic bsdiff 4 with bzip2) to `src`.

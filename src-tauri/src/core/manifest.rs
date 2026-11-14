@@ -49,6 +49,13 @@ pub struct Activation {
     pub working_dir: Option<String>,
     #[serde(default)]
     pub via: Via,
+    /// Environment variables for the game's process (`{gameDir}` filled in), e.g. `TIRGUMIM_LANG=he` for a proxy DLL
+    /// that does nothing without it. Steam would drop them, so these packs start the game with `via: direct`.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub env: std::collections::BTreeMap<String, String>,
+    /// `via: direct` only: Steam must be running first (the game uses Steam but doesn't start it).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub needs_steam: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -249,14 +256,25 @@ pub fn validate_manifest(mut m: Manifest) -> Result<Manifest, String> {
         if a.working_dir.as_deref().is_some_and(|w| !w.starts_with("{gameDir}") || w.contains("..")) {
             errs.push("activation workingDir must start with {gameDir}".into());
         }
-        for arg in &a.args {
+        for arg in a.args.iter().chain(a.env.values()) {
             let rest = arg.replace("{gameDir}", "");
             if rest.contains('{') || rest.contains('}') {
-                errs.push(format!("activation arg {arg:?}: only {{gameDir}} can be filled in"));
+                errs.push(format!("activation value {arg:?}: only {{gameDir}} can be filled in"));
             }
         }
-        if a.mode == ActivationMode::Args && a.args.is_empty() {
-            errs.push("an args pack needs \"args\" that point the game at its files".into());
+        for k in a.env.keys() {
+            if k.is_empty() || !k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+                errs.push(format!("activation env name {k:?} must be letters, digits and _"));
+            }
+        }
+        if !a.env.is_empty() && a.via != Via::Direct {
+            errs.push("activation env needs \"via\": \"direct\" (Steam does not pass environment variables to the game)".into());
+        }
+        if a.needs_steam && a.via != Via::Direct {
+            errs.push("\"needsSteam\" is for \"via\": \"direct\" (via steam always has Steam)".into());
+        }
+        if a.mode == ActivationMode::Args && a.args.is_empty() && a.env.is_empty() {
+            errs.push("an args pack needs \"args\" or \"env\" that point the game at its files".into());
         }
     }
     let mut zip_names = std::collections::HashSet::new();
@@ -283,8 +301,8 @@ pub fn validate_manifest(mut m: Manifest) -> Result<Manifest, String> {
                 }
                 Err(e) => errs.push(e),
             }
-            if mode != Some(ActivationMode::Args) || p.kind != PatchKind::Bsdiff {
-                errs.push(format!("patch \"output\" ({}) is for bsdiff patches in args packs", p.path));
+            if mode != Some(ActivationMode::Args) {
+                errs.push(format!("patch \"output\" ({}) is for args packs", p.path));
             }
         } else if mode == Some(ActivationMode::Args) {
             errs.push(format!("in an args pack, the patch for {} needs \"output\" (a new file), so the original stays untouched", p.path));
@@ -310,8 +328,9 @@ pub fn validate_manifest(mut m: Manifest) -> Result<Manifest, String> {
             if p.from_size.is_none() {
                 errs.push(format!("append patch for {} needs \"fromSize\"", p.path));
             }
-            if mode != Some(ActivationMode::Swap) {
-                errs.push(format!("append patch for {} is for swap packs only", p.path));
+            // Swap: added to the game's file during play. Args: a new file = the original + the data.
+            if mode.is_none() {
+                errs.push(format!("append patch for {} is for launch-only packs (swap, or args with \"output\")", p.path));
             }
         }
         for (k, h) in [("fromSha256", &mut p.from_sha256), ("toSha256", &mut p.to_sha256)] {

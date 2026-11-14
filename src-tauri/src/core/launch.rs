@@ -14,6 +14,8 @@ pub struct LaunchCmd {
     pub program: PathBuf,
     pub args: Vec<String>,
     pub cwd: Option<PathBuf>,
+    /// Set for the game only (never for Steam, which would not pass them on).
+    pub env: Vec<(String, String)>,
     /// Steam wasn't running: `-applaunch` starts it first, which takes a while.
     pub starting_steam: bool,
 }
@@ -45,9 +47,18 @@ pub fn build(a: &Activation, game_dir: &Path, steam_app_id: Option<&str>, steam:
             let steam = steam.ok_or_else(|| err("STEAM_MISSING", "Steam is not installed"))?;
             let mut all = vec!["-applaunch".to_string(), id.to_string()];
             all.extend(args);
-            Ok(LaunchCmd { program: steam.to_path_buf(), args: all, cwd: None, starting_steam: !procs.contains("steam.exe") })
+            Ok(LaunchCmd { program: steam.to_path_buf(), args: all, cwd: None, env: vec![], starting_steam: !procs.contains("steam.exe") })
         }
         Via::Direct => {
+            if a.needs_steam {
+                if steam.is_none() {
+                    return Err(err("STEAM_MISSING", "Steam is not installed"));
+                }
+                if !procs.contains("steam.exe") {
+                    return Err(err("STEAM_NOT_RUNNING", "Open Steam first"));
+                }
+            }
+            let env = a.env.iter().map(|(k, v)| (k.clone(), expand(v, game_dir))).collect();
             let cwd = match &a.working_dir {
                 Some(w) => {
                     let rel = w.trim_start_matches("{gameDir}").trim_start_matches(['/', '\\']);
@@ -55,7 +66,7 @@ pub fn build(a: &Activation, game_dir: &Path, steam_app_id: Option<&str>, steam:
                 }
                 None => exe.parent().unwrap_or(game_dir).to_path_buf(),
             };
-            Ok(LaunchCmd { program: exe, args, cwd: Some(cwd), starting_steam: false })
+            Ok(LaunchCmd { program: exe, args, cwd: Some(cwd), env, starting_steam: false })
         }
     }
 }
@@ -63,6 +74,7 @@ pub fn build(a: &Activation, game_dir: &Path, steam_app_id: Option<&str>, steam:
 pub fn spawn(c: &LaunchCmd) -> Result<(), PackError> {
     let mut cmd = Command::new(&c.program);
     cmd.args(&c.args);
+    cmd.envs(c.env.iter().map(|(k, v)| (k, v)));
     if let Some(d) = &c.cwd {
         cmd.current_dir(d);
     }
@@ -75,7 +87,7 @@ mod tests {
     use crate::core::manifest::ActivationMode;
 
     fn act(via: Via) -> Activation {
-        Activation { mode: ActivationMode::Args, exe: "UNDERTALE.exe".into(), args: vec!["-game".into(), "{gameDir}/data_he.win".into()], working_dir: None, via }
+        Activation { mode: ActivationMode::Args, exe: "UNDERTALE.exe".into(), args: vec!["-game".into(), "{gameDir}/data_he.win".into()], working_dir: None, via, env: Default::default(), needs_steam: false }
     }
 
     #[test]
@@ -101,6 +113,17 @@ mod tests {
         assert_eq!(d.program, game.join("UNDERTALE.exe"));
         assert_eq!(d.args, ["-game", he.as_str()]);
         assert_eq!(d.cwd.as_deref(), Some(game.as_path()));
+
+        // A proxy-DLL pack: env for the game, Steam must already run.
+        let mut proxy = act(Via::Direct);
+        proxy.args.clear();
+        proxy.env.insert("TIRGUMIM_LANG".into(), "he".into());
+        proxy.needs_steam = true;
+        assert_eq!(build(&proxy, &game, None, Some(&steam), &none).unwrap_err().code, "STEAM_NOT_RUNNING");
+        assert_eq!(build(&proxy, &game, None, None, &none).unwrap_err().code, "STEAM_MISSING");
+        let p = build(&proxy, &game, None, Some(&steam), &running).unwrap();
+        assert_eq!(p.env, [("TIRGUMIM_LANG".to_string(), "he".to_string())]);
+        assert!(p.args.is_empty());
 
         let mut missing = act(Via::Direct);
         missing.exe = "nope.exe".into();

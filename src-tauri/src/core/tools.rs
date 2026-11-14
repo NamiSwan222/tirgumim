@@ -96,6 +96,9 @@ pub fn make_pack(config: &Path, game_dir: Option<&Path>, out: Option<&Path>, url
                 "toSha256": util::hex(&h.finalize()), "size": from_size + add_len,
                 "data": zip_name,
             }));
+            if let Some(o) = p.get("output").and_then(Value::as_str) {
+                patches.last_mut().unwrap()["output"] = json!(o);
+            }
             patch_blobs.push((zip_name, fs::read(&add).map_err(|e| e.to_string())?));
             continue;
         }

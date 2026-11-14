@@ -151,14 +151,20 @@ game is the original. Without `activation` a pack is permanent, exactly as befor
   "exe": "UNDERTALE.exe",               // relative to the game root; must exist
   "args": ["-game", "{gameDir}/data_he.win"],
   "workingDir": "{gameDir}",            // optional, direct launches only; default the exe's folder
-  "via": "steam"                        // or "direct"; default "steam"
+  "via": "steam",                       // or "direct"; default "steam"
+  "env": { "TIRGUMIM_LANG": "he" },     // optional, needs via "direct" (Steam drops env vars)
+  "needsSteam": true                    // optional, via "direct": refuse with a Hebrew message until Steam runs
 }
 ```
 
 - **`args`**: the pack only **adds** files (installing refuses anything that would replace a game file,
   `WOULD_REPLACE`). A bsdiff patch writes its result to a new file with `"output": "data_he.win"`, leaving `path`
   untouched. Play starts the game with `args`, so only that start loads the Hebrew files. For engines that can be
-  pointed at other files (GameMaker `-game`).
+  pointed at other files (GameMaker `-game`), or that load a pack-supplied proxy DLL which does nothing unless
+  an `env` variable is set (Yu-Gi-Oh: `xinput9_1_0.dll` + `TIRGUMIM_LANG=he`, redirecting to Hebrew copies). An
+  `append` patch with `output` makes such a copy on the player's PC: the original followed by `data`, streamed,
+  hashed as written; the original is only read. **Preferred**: no game file is ever changed, so a Steam launch is
+  the original even after a crash.
 - **`swap`**: install keeps every Hebrew file in `<game>/.tirgumim/he/` and changes no game file. Play:
   1. checks the game is closed (`GAME_ALREADY_RUNNING` otherwise: never swap under a running game), and that the
      game's files are still the ones the pack was prepared on (`GAME_CHANGED`);
@@ -168,6 +174,9 @@ game is the original. Without `activation` a pack is permanent, exactly as befor
      run for 15 s, so a game that restarts itself through Steam is still covered);
   4. puts the originals back and removes the journal. Restoring looks only at the files on disk, so it is safe
      after a crash at any step and can run again; a file the game replaced meanwhile (an update) is left alone.
+  **Limit**: while swapped in, the real files are Hebrew. If the PC or launcher crashes during play and the game
+  is then started from Steam before the launcher opens again, it is Hebrew once; and Steam's "verify integrity"
+  during a session re-downloads the files. Use swap only for games that can't be redirected.
   The window can't be closed while a game is swapped in: closing hides it and the launcher quits after restoring.
   A second launcher start shows the first one. If the launcher dies anyway, its next start restores (or, if the
   game still runs, watches it again).
@@ -175,7 +184,7 @@ game is the original. Without `activation` a pack is permanent, exactly as befor
   playtime, achievements and DRM, and a game that would relaunch itself through Steam when started directly
   doesn't need to. No `steam_appid.txt` or DRM workarounds. Steam not installed: `STEAM_MISSING`; not running:
   Steam is started first. **`via: "direct"`** starts `exe` itself (games without Steam, or known to run directly).
-- **`append` patches** (swap packs only), for very big files:
+- **`append` patches**, for very big files. In args packs with `output` (a new file, see above); in swap packs:
   `{ "path": "YGO_DATA.dat", "kind": "append", "fromSha256", "fromSize", "toSha256", "size", "data": "patches/YGO_DATA.dat.append" }`.
   The result is the original followed by `data`. Nothing big is copied: play appends, restore cuts the file back to
   `fromSize` and checks `fromSha256`. Install checks `toSha256` by streaming (no extra RAM).
