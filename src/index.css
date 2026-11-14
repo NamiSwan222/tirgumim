@@ -88,6 +88,10 @@ main { overflow-y: auto; overflow-x: hidden; position: relative; scroll-behavior
 .statusbar .sep::before { content: '·'; margin-inline-end: 10px; }
 .statusbar .busy-note { color: var(--accent); }
 .statusbar .dev { color: var(--info); border: 1px solid var(--info); border-radius: 4px; padding: 0 6px; }
+.statusbar .self-update { display: inline-flex; align-items: center; gap: 6px; height: 20px; padding: 0 8px; border: 1px solid var(--accent); border-radius: 4px; background: transparent; color: var(--accent); font: inherit; cursor: pointer; }
+.statusbar .self-update:hover:not(:disabled) { background: var(--accent); color: #fff; }
+.statusbar .self-update:disabled { cursor: default; opacity: .8; }
+.statusbar .self-update svg { width: 13px; height: 13px; }
 
 /* ---------- pages ---------- */
 .page { min-height: 100%; animation: enter .26s var(--ease); }
@@ -236,7 +240,7 @@ main { overflow-y: auto; overflow-x: hidden; position: relative; scroll-behavior
 .scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, .55); display: grid; place-items: center; z-index: 100; animation: fade .15s ease; }
 .dialog { width: min(480px, calc(100vw - 32px)); padding: 22px 24px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line2); box-shadow: var(--shadow); display: grid; gap: 12px; animation: rise .2s var(--ease); }
 .dialog h2 { font: 600 19px var(--font-head); }
-.dialog p { color: #cfd3da; }
+.dialog p { color: #cfd3da; white-space: pre-line; }
 .dialog-actions { display: flex; gap: 10px; margin-top: 6px; }
 .field { display: grid; gap: 6px; }
 .field span { font-size: 13px; color: var(--muted); }

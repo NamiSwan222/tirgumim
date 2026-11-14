@@ -533,6 +533,9 @@ fn data_root() -> PathBuf {
 pub fn run(dev: bool) {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // Self-update from our GitHub releases (see `.github/workflows/release.yml`), then restart.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .register_asynchronous_uri_scheme_protocol("poster", |ctx, request, responder| {
             let app = ctx.app_handle().clone();
             let path = request.uri().path().to_string();

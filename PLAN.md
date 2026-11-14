@@ -19,9 +19,10 @@ self-update and the signed catalog are still to do.
 
 | # | What | How |
 |---|---|---|
-| 6 | **Installer** (done) | `npm run release` builds a Tauri NSIS installer with Hebrew screens and a Start menu shortcut. Next: upload it to a GitHub Release. |
-| 7 | **Self-update** | Tauri updater, `latest.json` from our newest GitHub release, signed with our own key. The private key stays on your PC, never in the repo. |
+| 6 | **Installer** (done) | `npm run release` builds a Tauri NSIS installer with Hebrew screens and a Start menu shortcut. GitHub Actions publishes it on every `v*` tag. |
+| 7 | **Self-update** (built, first release pending) | Tauri updater reads `latest.json` from the fixed `updater` release, signed with our own key (repo secret; the key file stays on your PC). `npm run publish-launcher` + `.github/workflows/release.yml`. Waits on the signing key being set up. |
 | 8 | **Signed catalog** | The same key signs `catalog.json` (`catalog.json.sig`). A catalog with a bad signature is ignored and the last good one is used. Protects players if the GitHub account is taken over. |
+| 9 | **Catalog check** (done) | `.github/workflows/check.yml` checks `catalog.json` on every push with the launcher's parser and rules, and that each GitHub-release pack has a release. |
 
 ## Stage 3: nice to have (later)
 

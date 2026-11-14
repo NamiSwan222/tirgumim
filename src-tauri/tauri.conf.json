@@ -35,5 +35,12 @@
     "windows": {
       "nsis": { "languages": ["Hebrew", "English"], "displayLanguageSelector": false }
     }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "REPLACE_WITH_TIRGUMIM_UPDATER_PUBKEY",
+      "endpoints": ["https://github.com/NamiSwan222/tirgumim/releases/download/updater/latest.json"],
+      "windows": { "installMode": "passive" }
+    }
   }
 }

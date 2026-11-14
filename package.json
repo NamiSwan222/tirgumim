@@ -13,11 +13,15 @@
     "release": "tauri build",
     "test": "cargo test --manifest-path src-tauri/Cargo.toml",
     "make-pack": "cargo run --quiet --manifest-path src-tauri/Cargo.toml -- --make-pack",
-    "dev:setup": "cargo run --quiet --manifest-path src-tauri/Cargo.toml -- --dev-setup"
+    "dev:setup": "cargo run --quiet --manifest-path src-tauri/Cargo.toml -- --dev-setup",
+    "check-catalog": "cargo run --quiet --manifest-path src-tauri/Cargo.toml -- --check-catalog catalog/catalog.json",
+    "publish-launcher": "node scripts/publish-launcher.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.4",
     "@tauri-apps/plugin-dialog": "^2.8.4",
+    "@tauri-apps/plugin-process": "^2.4.0",
+    "@tauri-apps/plugin-updater": "^2.14.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },

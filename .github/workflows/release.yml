@@ -1,0 +1,93 @@
+# Builds and publishes the launcher when a version tag is pushed (npm run publish-launcher -- 0.3.0 "notes").
+# 1. Checks the tag matches the version in every file, and runs the tests.
+# 2. Builds the Windows installer, signed for the updater with our key (repo secrets).
+# 3. Publishes release v0.3.0 with the installer, its .sig and latest.json.
+# 4. Copies latest.json to the fixed "updater" release, which every installed launcher checks for new versions.
+#    (A fixed release, not "latest", so translation-pack releases in this repo can never be mistaken for one.)
+name: Release launcher
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Check the tag matches the version in every file
+        run: node scripts/versions.mjs --check ${{ github.ref_name }}
+
+      - name: Check the signing key is set up
+        shell: bash
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then echo "::error::Add the TAURI_SIGNING_PRIVATE_KEY secret (README, Releasing the launcher)."; exit 1; fi
+          if grep -q REPLACE_WITH src-tauri/tauri.conf.json; then echo "::error::Put the updater public key in src-tauri/tauri.conf.json."; exit 1; fi
+
+      - run: npm ci
+
+      - name: Tests
+        run: npm test
+
+      - name: Release notes from the tag message
+        id: notes
+        shell: bash
+        run: |
+          {
+            echo 'body<<TIRGUMIM_NOTES'
+            git for-each-ref "refs/tags/${{ github.ref_name }}" --format='%(contents)'
+            echo 'TIRGUMIM_NOTES'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and publish the release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Tirgumim __VERSION__'
+          releaseBody: ${{ steps.notes.outputs.body }}
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true
+          updaterJsonPreferNsis: true
+          args: --config src-tauri/tauri.release.conf.json
+
+      - name: Point installed launchers at this version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release download "${{ github.ref_name }}" --pattern latest.json --dir out --clobber
+          cat out/latest.json
+          if ! gh release view updater >/dev/null 2>&1; then
+            gh release create updater --title "Launcher updates" --latest=false \
+              --notes "Used by the Tirgumim launcher to find new versions. Do not delete. Downloads are in the v* releases."
+          fi
+          gh release upload updater out/latest.json --clobber

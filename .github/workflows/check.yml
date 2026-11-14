@@ -1,0 +1,40 @@
+# Runs on every push and pull request:
+# - the catalog check: the list of translations players' launchers read, with the launcher's own parser, plus
+#   whether each GitHub-release pack really has a release with a checksum. A broken list fails here, before it
+#   reaches anyone (pushes to main that break it show a red X; protect main to block them).
+# - the tests and a type check of the window.
+name: Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: npm ci
+
+      - name: Catalog check
+        run: cargo run --quiet --manifest-path src-tauri/Cargo.toml -- --check-catalog catalog/catalog.json --online
+
+      - name: Tests
+        run: npm test
+
+      - name: Window type check and build
+        run: npm run build

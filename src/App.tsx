@@ -6,6 +6,7 @@ import { api, asError, type Game, type Library, type PcGame, type Progress } fro
 import { GamePage, PcGamePage, type Act } from './GamePage.tsx'
 import { GameCard, Icon, ICON, PcTile, Shelf, StatusPill } from './ui.tsx'
 import { CATALOG_SOURCE, errorText, title } from './texts.ts'
+import { useSelfUpdate } from './updater.ts'
 
 type Cat = 'home' | 'ours' | 'installed' | 'updates' | 'soon' | 'pc'
 type Page = { kind: 'cat'; cat: Cat } | { kind: 'game'; id: string } | { kind: 'pc'; store: string; id: string }
@@ -123,6 +124,19 @@ export default function App() {
     setToasts((t) => [...t.slice(-2), { id, text, kind }])
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), kind === 'error' ? 9000 : 5000)
   }, [])
+
+  const self = useSelfUpdate(!!info && !info.dev, (text) => toast(text, 'error'))
+
+  async function updateLauncher() {
+    if (!self.available) return
+    if (busy) { toast('אפשר לעדכן את המשגר אחרי שהפעולה הנוכחית תסתיים.', 'info'); return }
+    const notes = self.available.notes ? `
+
+מה חדש:
+${self.available.notes}` : ''
+    const ok = await ask('גרסה חדשה של המשגר', `גרסה ${self.available.version} זמינה. המשגר יוריד אותה, יתקין אותה ויופעל מחדש. התרגומים שהתקנתם נשארים כמו שהם.${notes}`, 'עדכון עכשיו')
+    if (ok) await self.install()
+  }
 
   const load = useCallback(async (reload: boolean) => {
     try {
@@ -349,6 +363,14 @@ export default function App() {
         {progGame && <span className="sep busy-note">{title(progGame)}: עובד…</span>}
         <span className="grow" />
         {info?.dev && <span className="dev">מצב בדיקה</span>}
+        {self.available && (
+          <button className="self-update" onClick={updateLauncher} disabled={self.progress !== undefined}>
+            <Icon g={ICON.update} />
+            {self.progress === undefined
+              ? <span>גרסה חדשה <span dir="ltr">{self.available.version}</span>: עדכון</span>
+              : <span>מעדכן…{self.progress != null && <span dir="ltr"> {Math.round(self.progress * 100)}%</span>}</span>}
+          </button>
+        )}
         {info && <span dir="ltr">Tirgumim {info.version}</span>}
       </footer>
 
