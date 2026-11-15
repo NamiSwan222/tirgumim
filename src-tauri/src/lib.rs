@@ -16,7 +16,7 @@ use crate::core::catalog::{self, Catalog, CatalogGame, ReleaseCache, ResolvedPac
 use crate::core::detect::{self, PcGame};
 use crate::core::installer::{InstallOptions, InstallRecord, Installer, PackError, UninstallResult};
 use crate::core::manifest::{self, ActivationMode, Via};
-use crate::core::{launch, swap};
+use crate::core::{discover, launch, swap};
 
 /// The `poster` protocol as the window reaches it (Tauri serves custom protocols at http://<name>.localhost on
 /// Windows).
@@ -45,6 +45,7 @@ struct CatalogState {
 pub struct Shared {
     installer: Installer,
     releases: ReleaseCache,
+    discovery: discover::Discovery,
     dev: bool,
     bundled_catalog: PathBuf,
     posters_dir: PathBuf,
@@ -102,6 +103,22 @@ impl Shared {
             if let Ok(c) = catalog::load_catalog(&bundled) {
                 catalog = Some(c);
                 source = Some("bundled".into());
+            }
+        }
+        // Our GitHub repos tagged tirgumim-pack: a new game shows up without a catalog commit or a launcher update.
+        if !self.dev {
+            match self.discovery.find(force) {
+                Ok(found) => {
+                    for s in &found.skipped {
+                        eprintln!("discovery: {s}");
+                    }
+                    let base = catalog.take().unwrap_or(Catalog { schema: 1, updated: None, games: vec![] });
+                    catalog = Some(Catalog { games: discover::merge(base.games, found.games), ..base });
+                    if source.is_none() || source.as_deref() == Some("bundled") && error.is_some() {
+                        source = Some("github".into());
+                    }
+                }
+                Err(e) => eprintln!("discovery: {e}"),
             }
         }
         let mut packs = HashMap::new();
@@ -690,6 +707,7 @@ pub fn run(dev: bool) {
             let version = app.package_info().version.to_string();
             app.manage(Shared {
                 releases: ReleaseCache::new(&data),
+                discovery: discover::Discovery::new(&data),
                 installer: Installer::new(&data, &version),
                 dev,
                 bundled_catalog: bundled,

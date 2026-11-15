@@ -1,7 +1,8 @@
 # Adding a game (no launcher update needed)
 
-The launcher knows nothing about any game. A new game is a **catalog entry** plus a **pack release**; players see it
-within 10 minutes (or right away with רענון). `check.yml` fails if game-specific code ever enters the app
+The launcher knows nothing about any game. It finds translations by itself in our GitHub repos: **a new game is a
+repo with the topic `tirgumim-pack`, a `pack/catalog-entry.json` file and a release**. No catalog commit, no
+launcher update. Players see it within 10 minutes, or right away with **Ctrl+F5**. `check.yml` fails if game-specific code ever enters the app
 (`scripts/no-game-code.mjs`).
 
 ## 1. Pick how the translation turns on
@@ -30,10 +31,16 @@ does, the pack sets `minLauncherVersion` and older launchers say "update the lau
 1. Release on the game's repo, tag `<game>-<ver>`, asset `<game>-he-<ver>.zip`. Paste the
    `tirgumim-min-launcher: X` line make-pack printed into the release notes, so older launchers keep the last
    release they can install.
-2. Add the game to `catalog/catalog.json`:
+2. In the game's repo (owner `NamiSwan222`, public), commit `pack/catalog-entry.json` on the default branch:
    `id`, `name`, `nameHe`, `aboutHe`, `engine`, `detect` (`steamAppId` / `epicAppName`, `markerFile`,
-   `processNames`), `pack: { github, tag, asset }`. Add `"minLauncherVersion"` if no released launcher can install
-   it yet (players then see "update the launcher"). `npm run check-catalog` must pass.
-3. Push. GitHub's check runs the same catalog check, including that the release exists with a checksum.
+   `processNames`), and optionally `pack: { tag, asset }` (default: every release of this repo, first `.zip`).
+   Add `"minLauncherVersion"` if no released launcher can install it yet.
+3. Add the topic **`tirgumim-pack`** to the repo (GitHub: the gear next to "About"). That is what makes the launcher
+   find it. Removing the topic, or archiving the repo, takes the game out.
+4. Check it: `npm run check-catalog -- --online --discover` in the launcher repo (GitHub runs the same on every
+   push there). It reads every tagged repo's entry with the strict rules and checks its release has a checksum.
+
+`catalog/catalog.json` still works and ships inside the app as the offline fallback; an entry in a repo replaces a
+catalog entry with the same `id`. Only repos of `NamiSwan222` count, whatever topics others use.
 
 Run the game-translation risk check first (free-only vs paid).

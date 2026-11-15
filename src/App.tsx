@@ -46,7 +46,7 @@ function TitleBar({ query, setQuery, searchRef, onRefresh, refreshing }: {
         <input ref={searchRef} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="חיפוש משחק" spellCheck={false} />
         <kbd dir="ltr">Ctrl K</kbd>
       </label>
-      <button className={`tb-btn ${refreshing ? 'spin' : ''}`} onClick={onRefresh} title="רענון: סריקת המחשב ובדיקת תרגומים חדשים" disabled={refreshing}>
+      <button className={`tb-btn ${refreshing ? 'spin' : ''}`} onClick={onRefresh} title="רענון (Ctrl+F5): סריקת המחשב ובדיקה ב-GitHub אם יש תרגומים חדשים" disabled={refreshing}>
         <Icon g={ICON.refresh} />
       </button>
       <div className="grow" data-tauri-drag-region />
@@ -186,6 +186,7 @@ ${self.available.notes}` : ''
     const key = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); searchRef.current?.focus(); searchRef.current?.select() }
       else if (e.key === 'Escape' && !confirm && !settings) { if (query) setQuery(''); else if (page.kind !== 'cat') back() }
+      // F5 or Ctrl+F5: scan the PC again and ask GitHub for new translations right away (skips the 10-minute cache).
       else if (e.key === 'F5') { e.preventDefault(); refresh() }
     }
     window.addEventListener('keydown', key)
@@ -199,7 +200,7 @@ ${self.available.notes}` : ''
     setRefreshing(true)
     await load(true)
     setRefreshing(false)
-    toast('הרשימה עודכנה', 'ok')
+    toast('בדקנו ב-GitHub. הרשימה מעודכנת.', 'ok')
   }
 
   async function play(g: Game) {
@@ -387,6 +388,7 @@ ${self.available.notes}` : ''
         {lib && <span className="sep">{games.length} תרגומים · {others.length} משחקים במחשב</span>}
         {progGame && <span className="sep busy-note">{title(progGame)}: עובד…</span>}
         <span className="grow" />
+        <span className="hint" title="המשגר בודק ב-GitHub כל 10 דקות. כדי לבדוק עכשיו, לחצו Ctrl+F5.">תרגום חדש לא מופיע? <kbd dir="ltr">Ctrl+F5</kbd></span>
         {info?.dev && <span className="dev">מצב בדיקה</span>}
         {self.available && (
           <button className="self-update" onClick={updateLauncher} disabled={self.progress !== undefined}>

@@ -88,6 +88,8 @@ main { overflow-y: auto; overflow-x: hidden; position: relative; scroll-behavior
 .statusbar .sep::before { content: '·'; margin-inline-end: 10px; }
 .statusbar .busy-note { color: var(--accent); }
 .statusbar .dev { color: var(--info); border: 1px solid var(--info); border-radius: 4px; padding: 0 6px; }
+.statusbar .hint { color: var(--faint); }
+.statusbar .hint kbd { font: inherit; font-size: 11px; padding: 0 5px; border: 1px solid var(--line); border-radius: 4px; margin-inline-start: 4px; }
 .statusbar .self-update { display: inline-flex; align-items: center; gap: 6px; height: 20px; padding: 0 8px; border: 1px solid var(--accent); border-radius: 4px; background: transparent; color: var(--accent); font: inherit; cursor: pointer; }
 .statusbar .self-update:hover:not(:disabled) { background: var(--accent); color: #fff; }
 .statusbar .self-update:disabled { cursor: default; opacity: .8; }

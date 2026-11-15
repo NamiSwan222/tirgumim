@@ -15,6 +15,20 @@ flag so accounts can be added later without changing the pack format).
 | **Launcher** | this repo | Finds games, downloads/verifies packs, installs with backup, restores |
 | **make-pack tool** | `npm run make-pack` (`src-tauri/src/core/tools.rs`) | Builds a pack zip from a folder, fills in hashes, prints the catalog entry |
 
+## 1b. Where the list of translations comes from (0.4.1+)
+
+1. **Our GitHub repos.** One unauthenticated search finds every repo of `NamiSwan222` with the topic
+   `tirgumim-pack` (archived repos are left out). Each repo's `pack/catalog-entry.json` (raw.githubusercontent.com, no
+   API limit) is its game entry, in the catalog format below; `pack` defaults to the repo's own releases. Kept for
+   10 minutes in `data\discovered.json`; Ctrl+F5 / רענון asks again (not sooner than 10 s); if GitHub can't be
+   reached, the last answer is used. An entry the launcher can't read is skipped.
+2. **`catalog.json`** from this repo (or the copy inside the app when offline), for anything not in a tagged repo.
+   A repo entry replaces a catalog entry with the same `id`.
+
+So adding a game needs neither a catalog commit nor a launcher update (see ADDING-A-GAME.md).
+`npm run check-catalog -- --online --discover` checks the tagged repos with the strict rules; GitHub runs it on
+every push.
+
 ## 2. Catalog format (`catalog.json`)
 
 ```json

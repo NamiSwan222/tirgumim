@@ -58,6 +58,10 @@ fn main() {
     tirgumim_lib::run(dev);
 }
 
+fn report_errors_push(r: &mut tirgumim_lib::core::check::Report, e: String) {
+    r.errors.push(e);
+}
+
 fn check_catalog(args: &[String]) -> i32 {
     use tirgumim_lib::core::{catalog, check};
     let Some(file) = args.get(1).filter(|a| !a.starts_with("--")) else {
@@ -74,6 +78,29 @@ fn check_catalog(args: &[String]) -> i32 {
     let (parsed, mut report) = check::check_offline(&text);
     if let Some(c) = &parsed {
         println!("{file}: {} games", c.games.len());
+        if args.iter().any(|a| a == "--discover") {
+            // Our tagged repos: each entry checked with the same strict rules, plus its releases.
+            let tmp = std::env::temp_dir().join(format!("tirgumim-check-{}", std::process::id()));
+            match tirgumim_lib::core::discover::Discovery::new(&tmp).fetch_entries() {
+                Ok((entries, failed)) => {
+                    println!("{} tagged repos found", entries.len() + failed.len());
+                    for f in failed {
+                        report_errors_push(&mut report, format!("repo entry: {f}"));
+                    }
+                    let doc = serde_json::json!({ "schema": 1, "games": entries });
+                    let (found, r) = check::check_offline(&doc.to_string());
+                    report.errors.extend(r.errors);
+                    report.warnings.extend(r.warnings);
+                    if let Some(f) = found {
+                        check::check_releases(&f, &mut report, &mut |repo| {
+                            let url = format!("https://api.github.com/repos/{repo}/releases?per_page=50");
+                            catalog::fetch_text(&url).and_then(|t| serde_json::from_str(&t).map_err(|e| e.to_string()))
+                        });
+                    }
+                }
+                Err(e) => report.errors.push(format!("GitHub search: {e}")),
+            }
+        }
         if args.iter().any(|a| a == "--online") {
             check::check_releases(c, &mut report, &mut |repo| {
                 let url = format!("https://api.github.com/repos/{repo}/releases?per_page=50");

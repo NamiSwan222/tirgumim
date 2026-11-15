@@ -3,6 +3,7 @@
 pub mod catalog;
 pub mod check;
 pub mod detect;
+pub mod discover;
 pub mod installer;
 pub mod launch;
 pub mod manifest;
