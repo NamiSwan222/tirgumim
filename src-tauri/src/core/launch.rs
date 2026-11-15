@@ -87,7 +87,7 @@ mod tests {
     use crate::core::manifest::ActivationMode;
 
     fn act(via: Via) -> Activation {
-        Activation { mode: ActivationMode::Args, exe: "UNDERTALE.exe".into(), args: vec!["-game".into(), "{gameDir}/data_he.win".into()], working_dir: None, via, env: Default::default(), needs_steam: false }
+        Activation { mode: ActivationMode::Args, exe: "UNDERTALE.exe".into(), args: vec!["-game".into(), if via == Via::Steam { "data_he.win" } else { "{gameDir}/data_he.win" }.into()], working_dir: None, via, env: Default::default(), needs_steam: false }
     }
 
     #[test]
@@ -102,7 +102,7 @@ mod tests {
 
         let c = build(&act(Via::Steam), &game, Some("391540"), Some(&steam), &none).unwrap();
         assert_eq!(c.program, steam);
-        assert_eq!(c.args, ["-applaunch", "391540", "-game", he.as_str()]);
+        assert_eq!(c.args, ["-applaunch", "391540", "-game", "data_he.win"]);
         assert!(c.starting_steam);
         let running: HashSet<String> = ["steam.exe".to_string()].into();
         assert!(!build(&act(Via::Steam), &game, Some("391540"), Some(&steam), &running).unwrap().starting_steam);

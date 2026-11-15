@@ -438,7 +438,7 @@ fn launch_setup() -> PatchSetup {
 #[test]
 fn args_pack_only_adds_files_and_leaves_every_original_alone() {
     let p = launch_setup();
-    let act = serde_json::json!({ "mode": "args", "exe": "SampleGame.exe", "args": ["-game", "{gameDir}/data_he.win"], "via": "steam" });
+    let act = serde_json::json!({ "mode": "args", "exe": "SampleGame.exe", "args": ["-game", "data_he.win"], "via": "steam" });
     let (zip, m) = launch_pack(&p, "args", act.clone(), serde_json::json!([{ "path": "data.win", "patched": "data.win.changed", "output": "data_he.win" }])).unwrap();
     assert_eq!(m["minLauncherVersion"], manifest::LAUNCH_MIN_LAUNCHER);
 
@@ -638,7 +638,7 @@ fn launch_manifest_rules() {
         serde_json::json!({ "schema": 1, "packId": "p", "gameId": "g", "version": "1", "minLauncherVersion": min,
             "files": [{ "path": "a.txt", "sha256": h('c') }], "patches": patches, "activation": act }).to_string()
     };
-    let args = serde_json::json!({ "mode": "args", "exe": "Game.exe", "args": ["-game", "{gameDir}/he.win"] });
+    let args = serde_json::json!({ "mode": "args", "exe": "Game.exe", "args": ["-game", "he.win"] });
     let swap_act = serde_json::json!({ "mode": "swap", "exe": "Game.exe" });
     let bs = |out: Option<&str>| {
         let mut v = serde_json::json!({ "path": "data.win", "fromSha256": h('a'), "toSha256": h('b'), "patch": "patches/data.win.bsdiff" });
@@ -654,6 +654,16 @@ fn launch_manifest_rules() {
     assert!(ok(m(args.clone(), serde_json::json!([ap.clone()]), "0.4.0")).is_err(), "append changes the original");
     assert!(ok(m(swap_act.clone(), serde_json::json!([bs(Some("he.win"))]), "0.4.0")).is_err());
     assert!(ok(m(serde_json::Value::Null, serde_json::json!([ap]), "0.4.0")).is_err(), "append is for swap packs");
+    // Steam drops quotes: no {gameDir} or spaces in Steam args; a direct launch may use {gameDir}.
+    for bad in ["{gameDir}/he.win", "my he.win"] {
+        let mut a = args.clone();
+        a["args"] = serde_json::json!(["-game", bad]);
+        assert!(ok(m(a, serde_json::json!([bs(Some("he.win"))]), "0.4.0")).is_err(), "{bad} with via steam");
+    }
+    let mut direct = args.clone();
+    direct["args"] = serde_json::json!(["-game", "{gameDir}/he.win"]);
+    direct["via"] = "direct".into();
+    assert!(ok(m(direct, serde_json::json!([bs(Some("he.win"))]), "0.4.0")).is_ok());
     let mut bad_arg = args.clone();
     bad_arg["args"] = serde_json::json!(["{appData}/x"]);
     assert!(ok(m(bad_arg, serde_json::json!([bs(Some("he.win"))]), "0.4.0")).is_err());

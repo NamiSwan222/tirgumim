@@ -149,7 +149,7 @@ game is the original. Without `activation` a pack is permanent, exactly as befor
 "activation": {
   "mode": "args",                       // or "swap"
   "exe": "UNDERTALE.exe",               // relative to the game root; must exist
-  "args": ["-game", "{gameDir}/data_he.win"],
+  "args": ["-game", "data_he.win"],     // via steam: relative names only (see below)
   "workingDir": "{gameDir}",            // optional, direct launches only; default the exe's folder
   "via": "steam",                       // or "direct"; default "steam"
   "env": { "TIRGUMIM_LANG": "he" },     // optional, needs via "direct" (Steam drops env vars)
@@ -182,7 +182,9 @@ game is the original. Without `activation` a pack is permanent, exactly as befor
   game still runs, watches it again).
 - **`via: "steam"`** runs `steam.exe -applaunch <catalog detect.steamAppId> <args>`: Steam keeps the overlay,
   playtime, achievements and DRM, and a game that would relaunch itself through Steam when started directly
-  doesn't need to. No `steam_appid.txt` or DRM workarounds. Steam not installed: `STEAM_MISSING`; not running:
+  doesn't need to. Steam starts the game in its own folder but **drops the quotes** around arguments, so with
+  `via: "steam"` the args may not contain `{gameDir}` or spaces (refused): use names relative to the game folder
+  (tested on Undertale: `-applaunch 391540 -game data_he.win`). No `steam_appid.txt` or DRM workarounds. Steam not installed: `STEAM_MISSING`; not running:
   Steam is started first. **`via: "direct"`** starts `exe` itself (games without Steam, or known to run directly).
 - **`append` patches**, for very big files. In args packs with `output` (a new file, see above); in swap packs:
   `{ "path": "YGO_DATA.dat", "kind": "append", "fromSha256", "fromSize", "toSha256", "size", "data": "patches/YGO_DATA.dat.append" }`.

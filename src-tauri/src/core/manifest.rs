@@ -270,6 +270,11 @@ pub fn validate_manifest(mut m: Manifest) -> Result<Manifest, String> {
         if !a.env.is_empty() && a.via != Via::Direct {
             errs.push("activation env needs \"via\": \"direct\" (Steam does not pass environment variables to the game)".into());
         }
+        // Steam drops the quotes around launch arguments, so a path with spaces (the default library is under
+        // "Program Files (x86)") splits. Steam starts the game in its own folder: use bare relative names.
+        if a.via == Via::Steam && a.args.iter().any(|x| x.contains("{gameDir}") || x.chars().any(char::is_whitespace)) {
+            errs.push("with \"via\": \"steam\", args can't contain {gameDir} or spaces (Steam drops the quotes); use names relative to the game folder".into());
+        }
         if a.needs_steam && a.via != Via::Direct {
             errs.push("\"needsSteam\" is for \"via\": \"direct\" (via steam always has Steam)".into());
         }
