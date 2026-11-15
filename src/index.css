@@ -318,3 +318,61 @@ main { overflow-y: auto; overflow-x: hidden; position: relative; scroll-behavior
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---------- game color ----------
+   The window takes its hue from the game in front of it (see color.ts). Without one, the subtitle yellow stays. */
+.app { --hue: var(--game-h, 48); --glow: hsl(var(--hue) var(--game-s, 90%) var(--game-l, 64%)); }
+.app { --sub: var(--glow); --sub-hover: hsl(var(--hue) var(--game-s, 90%) 74%); --on-sub: hsl(var(--hue) 60% 8%); }
+.app { transition: --hue .4s; background: radial-gradient(120% 80% at 80% 0%, hsl(var(--hue) 40% 14% / .9), var(--night) 60%); }
+.body, .titlebar, .sidebar, .statusbar { background: transparent; }
+.sidebar, .statusbar, .titlebar { background: rgba(17, 15, 21, .55); backdrop-filter: blur(10px); }
+
+/* ---------- home stage ---------- */
+.page.stage { position: relative; height: 100%; min-height: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; }
+.stage-art { position: absolute; inset: 0; animation: fade .5s ease; }
+.stage-art img { width: 100%; height: 100%; object-fit: cover; object-position: 50% 25%; display: block; }
+.stage-art img.as-cover { filter: blur(40px) brightness(.5) saturate(1.4); transform: scale(1.3); }
+.stage-shade { position: absolute; inset: 0; background:
+  linear-gradient(to top, rgba(17, 15, 21, .98) 0%, rgba(17, 15, 21, .75) 34%, rgba(17, 15, 21, 0) 68%),
+  linear-gradient(to left, rgba(17, 15, 21, .85) 0%, rgba(17, 15, 21, .35) 45%, rgba(17, 15, 21, 0) 75%); }
+.stage-copy { position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 0 44px 22px; max-width: 760px; animation: fade .35s ease; }
+.stage-en { color: var(--paper2); opacity: .85; font-size: 14px; }
+.stage-title { font: 700 clamp(72px, 10vw, 118px)/.84 var(--font-head); text-shadow: 0 6px 30px rgba(0, 0, 0, .5); margin-bottom: 8px; }
+.stage-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 18px; }
+.fact-chip { font-size: 13px; color: var(--ash); }
+.stage-about { margin-top: 10px; font-size: 16.5px; max-width: 58ch; color: var(--sub); font-weight: 600; text-shadow: var(--sub-edge); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.btn.glow { box-shadow: 0 8px 28px -6px var(--glow); }
+.btn.glass { background: rgba(17, 15, 21, .55); backdrop-filter: blur(10px); box-shadow: inset 0 0 0 1px var(--rule2); }
+.btn.glass:hover:not(:disabled) { background: rgba(54, 48, 64, .7); }
+
+.rail-wrap { position: relative; padding: 0 44px 24px; }
+.rail-wrap header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; }
+.rail-wrap h2 { font: 700 28px/1 var(--font-head); }
+.rail-wrap .count { font-size: 14px; color: var(--smoke); font-weight: 600; }
+.rail { display: flex; gap: 14px; overflow-x: auto; padding: 6px 4px 10px; scrollbar-width: none; }
+.rail::-webkit-scrollbar { display: none; }
+.rail-item { flex: none; width: 104px; display: grid; gap: 7px; text-align: start; opacity: .62; transition: opacity .2s, transform .25s var(--ease); }
+.rail-item .cover { aspect-ratio: 2 / 3; border-radius: 6px; box-shadow: 0 0 0 1px rgba(255, 255, 255, .06); transition: box-shadow .2s; }
+.rail-item:hover { opacity: 1; }
+.rail-item.on { opacity: 1; transform: translateY(-6px); }
+.rail-item.on .cover { box-shadow: 0 0 0 2px var(--glow), 0 14px 30px -10px var(--glow); }
+.rail-name { font-size: 13px; font-weight: 700; line-height: 1.25; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.empty-stage { justify-content: center; }
+
+/* ---------- store, account ---------- */
+.nav.account span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-note { display: flex; align-items: center; gap: 12px; padding: 12px 16px; margin-bottom: 18px; max-width: 760px; border-radius: 4px 10px 10px 4px; background: var(--dusk); border-inline-start: 3px solid var(--sub); }
+.account-note > .icon { color: var(--sub); }
+.account-note > span:nth-child(2) { flex: 1; }
+.account-note.warn { border-inline-start-color: var(--warn); }
+.account-note.warn > .icon { color: var(--warn); }
+.shop-grid { display: grid; gap: 28px; max-width: 900px; }
+.shop-item { display: flex; gap: 26px; padding-bottom: 28px; border-bottom: 1px solid var(--rule); }
+.shop-item .cover { width: 150px; flex: none; aspect-ratio: 2 / 3; border-radius: 6px; box-shadow: var(--shadow), 0 0 0 1px rgba(255, 255, 255, .06); }
+.shop-info { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; }
+.shop-info h3 { font: 700 46px/.95 var(--font-head); }
+.shop-en { color: var(--smoke); font-size: 13px; }
+.shop-info p { color: var(--paper2); max-width: 56ch; }
+.shop-buy { margin-top: auto; padding-top: 12px; }
+.shop-soon { color: var(--smoke); font-weight: 600; }
+.dialog .code { font: 700 44px/1 var(--font-head); letter-spacing: 6px; color: var(--sub); text-align: center; padding: 10px 0; }

@@ -16,6 +16,8 @@ use crate::core::catalog::{self, Catalog, CatalogGame, ReleaseCache, ResolvedPac
 use crate::core::detect::{self, PcGame};
 use crate::core::installer::{InstallOptions, InstallRecord, Installer, PackError, UninstallResult};
 use crate::core::manifest::{self, ActivationMode, Via};
+use crate::core::account::{self, Accounts, Poll};
+use crate::core::entitlements::Snapshot;
 use crate::core::{discover, launch, swap};
 
 /// The `poster` protocol as the window reaches it (Tauri serves custom protocols at http://<name>.localhost on
@@ -58,6 +60,10 @@ pub struct Shared {
     sessions: Mutex<HashSet<String>>,
     /// The window was closed while a game ran: quit once every game is back to normal.
     exit_after: AtomicBool,
+    /// Sign-in and who owns which paid translation (see ENTITLEMENTS.md).
+    accounts: Accounts,
+    /// A thread is polling a pending email sign-in.
+    sign_in_polling: AtomicBool,
 }
 
 fn err(code: &str, msg: impl Into<String>) -> PackError {
@@ -124,7 +130,12 @@ impl Shared {
         let mut packs = HashMap::new();
         if let Some(c) = &catalog {
             for g in &c.games {
-                if let Some(p) = &g.pack {
+                if g.paid {
+                    // A paid pack is never a public link: its version comes from the account server, the file
+                    // only through a download grant. Without a server it is simply not out yet.
+                    let p = if self.accounts.configured() { self.accounts.pack_info(&g.id) } else { Err(catalog::NO_RELEASE.to_string()) };
+                    packs.insert(g.id.clone(), p);
+                } else if let Some(p) = &g.pack {
                     packs.insert(g.id.clone(), self.releases.resolve(p, force));
                 }
             }
@@ -191,9 +202,15 @@ impl Shared {
         g.detect.process_names.iter().find(|p| procs.contains(&p.to_lowercase())).cloned()
     }
 
-    fn game_view(&self, g: &CatalogGame, procs: &HashSet<String>) -> Value {
+    /// Paid in the catalog, or installed from a paid pack (a catalog edited to say "free" doesn't lift the gate).
+    fn is_paid(&self, g: &CatalogGame) -> bool {
+        g.paid || self.installer.record(&g.id).is_some_and(|r| r.paid)
+    }
+
+    fn game_view(&self, g: &CatalogGame, procs: &HashSet<String>, owned: &Snapshot) -> Value {
         let loc = self.locate(g);
         let rec = self.installer.record(&g.id);
+        let paid = g.paid || rec.as_ref().is_some_and(|r| r.paid);
         // While a swap pack's files are in the game, its waiting copies are away: not a repair case.
         let swapped = rec.as_ref().is_some_and(|r| !r.swap.is_empty() && swap::is_active(Path::new(&r.game_dir)));
         let playing = swapped || self.sessions.lock().unwrap().contains(&g.id);
@@ -241,6 +258,9 @@ impl Shared {
             "launchOnly": rec.as_ref().and_then(|r| r.activation.as_ref()).map(|a| match a.mode { ActivationMode::Args => "args", ActivationMode::Swap => "swap" }),
             "needs": needs,
             "minLauncherVersion": g.min_launcher_version,
+            "paid": paid,
+            "priceId": g.price_id,
+            "access": owned.access(paid, &g.id),
             "installed": rec.as_ref().map(|r| json!({
                 "version": r.version, "installedAt": r.installed_at, "gameVersion": r.game_version,
                 "forced": r.forced_unknown_version, "changed": verify.as_ref().map(|v| v.changed.clone()).unwrap_or_default(),
@@ -281,9 +301,11 @@ impl Shared {
                 c.catalog.as_ref().and_then(|c| c.updated.clone()),
             )
         };
+        self.accounts.refresh_if_stale();
+        let owned = self.accounts.snapshot();
         let procs = detect::running_processes();
         json!({
-            "translations": games.iter().map(|g| self.game_view(g, &procs)).collect::<Vec<_>>(),
+            "translations": games.iter().map(|g| self.game_view(g, &procs, &owned)).collect::<Vec<_>>(),
             "others": self.other_games(&games),
             "catalog": { "source": source, "error": error, "updated": updated },
         })
@@ -298,6 +320,9 @@ impl Shared {
 
     fn do_install(&self, app: &AppHandle, game_id: &str, force: bool, update: bool) -> Result<InstallRecord, PackError> {
         let g = self.game(game_id)?;
+        // Paid translations: only accounts that own them (bought, or approved by us). Free games pass untouched.
+        let paid = self.is_paid(&g);
+        self.accounts.check_access(paid, game_id)?;
         let pack = match self.pack(game_id) {
             Some(Ok(p)) => p,
             Some(Err(e)) => return Err(err("PACK_UNAVAILABLE", e)),
@@ -317,14 +342,25 @@ impl Shared {
         let emit = |step: &str, fraction: Option<f64>| {
             let _ = app.emit("progress", json!({ "gameId": game_id, "step": step, "fraction": fraction }));
         };
+        // A paid pack's link and checksum come from a signed download grant the server gives this account and PC.
+        let (url, sha256) = if paid {
+            let grant = self.accounts.download_grant(game_id)?;
+            (grant.url, grant.sha256)
+        } else {
+            (pack.url.clone(), pack.sha256.clone())
+        };
         emit("download", Some(0.0));
         let dl = self.installer.data_dir.join("downloads");
-        let zip = catalog::download(&pack.url, &dl, &mut |f| emit("download", f)).map_err(|e| err("DOWNLOAD", e))?;
-        let o = InstallOptions { game_id, game_dir: &dir, zip_path: &zip, expected_sha256: Some(&pack.sha256), force };
+        let zip = catalog::download(&url, &dl, &mut |f| emit("download", f)).map_err(|e| err("DOWNLOAD", e))?;
+        let o = InstallOptions { game_id, game_dir: &dir, zip_path: &zip, expected_sha256: Some(&sha256), force };
         let mut progress = |step: &str| emit(step, None);
         let res = if update { self.installer.update(&o, &mut progress) } else { self.installer.install(&o, &mut progress) };
         if zip.starts_with(&dl) {
             let _ = std::fs::remove_file(&zip);
+        }
+        if paid && res.is_ok() {
+            self.installer.mark_paid(game_id)?;
+            return self.installer.record(game_id).ok_or_else(|| err("ERROR", "Install record missing"));
         }
         res
     }
@@ -334,6 +370,7 @@ impl Shared {
     fn play(&self, app: &AppHandle, game_id: &str) -> Result<Value, PackError> {
         let g = self.game(game_id)?;
         let rec = self.installer.record(game_id).ok_or_else(|| err("NOT_INSTALLED", "The translation is not prepared yet"))?;
+        self.accounts.check_access(g.paid || rec.paid, game_id)?;
         let act = rec.activation.clone().ok_or_else(|| err("NOT_LAUNCH_ONLY", "This translation is always on; start the game as usual"))?;
         let dir = PathBuf::from(&rec.game_dir);
         if self.sessions.lock().unwrap().contains(game_id) {
@@ -568,6 +605,162 @@ fn set_settings(st: State<'_, Shared>, catalog_url: String) -> Result<(), PackEr
     st.installer.save_state(&s)
 }
 
+// ---------- account, entitlements, store (ENTITLEMENTS.md) ----------
+
+impl Shared {
+    /// The paid translations, with the server's prices. Works without a server: everything is "not for sale yet".
+    fn store_list(&self) -> Value {
+        if self.cat.lock().unwrap().catalog.is_none() {
+            self.refresh_catalog(false);
+        }
+        let games: Vec<CatalogGame> = self.cat.lock().unwrap().catalog.as_ref().map(|c| c.games.iter().filter(|g| g.paid).cloned().collect()).unwrap_or_default();
+        let configured = self.accounts.configured();
+        let (server, error) = if configured && !games.is_empty() {
+            match self.accounts.store() {
+                Ok(v) => (Some(v), None),
+                Err(e) => (None, Some(e)),
+            }
+        } else {
+            (None, None)
+        };
+        let payments = server.as_ref().and_then(|s| s.get("paymentsConfigured")).and_then(Value::as_bool).unwrap_or(false);
+        let products: Vec<Value> = server.as_ref().and_then(|s| s.get("products")).and_then(Value::as_array).cloned().unwrap_or_default();
+        let owned = self.accounts.snapshot();
+        let items: Vec<Value> = games
+            .iter()
+            .map(|g| {
+                let p = products.iter().find(|p| p.get("gameId").and_then(Value::as_str) == Some(g.id.as_str()) && p.get("active").and_then(Value::as_bool).unwrap_or(false));
+                let amount = p.and_then(|p| p.get("amount")).and_then(Value::as_u64);
+                let currency = p.and_then(|p| p.get("currency")).and_then(Value::as_str).map(str::to_uppercase);
+                let price_id = p.and_then(|p| p.get("priceId")).and_then(Value::as_str).map(str::to_string);
+                let price = match (amount, &currency) {
+                    (Some(a), Some(c)) => json!({ "amount": a, "currency": c }),
+                    _ => Value::Null,
+                };
+                let id = urlencode(&g.id);
+                json!({
+                    "gameId": g.id, "name": g.name, "nameHe": g.name_he, "aboutHe": g.about_he,
+                    "cover": format!("{}/cover/game/{id}", POSTER_BASE),
+                    "hero": format!("{}/hero/game/{id}", POSTER_BASE),
+                    "priceId": price_id.clone().or_else(|| g.price_id.clone()),
+                    "price": price,
+                    "priceUnset": price.is_null(),
+                    "forSale": payments && price_id.is_some() && !price.is_null(),
+                    "access": owned.access(true, &g.id),
+                })
+            })
+            .collect();
+        json!({
+            "configured": configured,
+            "paymentsConfigured": payments,
+            "signedIn": self.accounts.state().status == "signedIn",
+            "error": error,
+            "items": items,
+        })
+    }
+}
+
+/// Polls a pending email sign-in every 3 seconds until it is confirmed, expires or is cancelled, and tells the
+/// window (`account` event) when it changes.
+fn spawn_sign_in_poller(app: AppHandle) {
+    if app.state::<Shared>().sign_in_polling.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(move || {
+        let st = app.state::<Shared>();
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            match st.accounts.poll_sign_in() {
+                Ok(Poll::Waiting) => continue,
+                Err(e) if e.code == "ACCOUNT_SERVER" || e.code == "RATE_LIMITED" => continue,
+                Ok(Poll::SignedIn) => {
+                    let _ = app.emit("account", json!({ "event": "signedIn", "state": st.accounts.state() }));
+                }
+                Ok(Poll::Expired) => {
+                    let _ = app.emit("account", json!({ "event": "signInExpired", "state": st.accounts.state() }));
+                }
+                Ok(Poll::Nothing) => {}
+                Err(e) => {
+                    st.accounts.cancel_sign_in();
+                    let _ = app.emit("account", json!({ "event": "signInFailed", "error": e, "state": st.accounts.state() }));
+                }
+            }
+            break;
+        }
+        st.sign_in_polling.store(false, Ordering::SeqCst);
+    });
+}
+
+#[tauri::command]
+async fn account_state(app: AppHandle) -> Result<account::AccountState, PackError> {
+    blocking(move || Ok(app.state::<Shared>().accounts.state())).await
+}
+
+/// Emails a sign-in link. Answers at once with the "pending" state (and the code the browser page will show);
+/// the `account` event says when the sign-in is done.
+#[tauri::command]
+async fn sign_in(app: AppHandle, email: String) -> Result<account::AccountState, PackError> {
+    blocking(move || {
+        let s = app.state::<Shared>().accounts.start_sign_in(&email)?;
+        spawn_sign_in_poller(app.clone());
+        Ok(s)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn cancel_sign_in(app: AppHandle) -> Result<account::AccountState, PackError> {
+    blocking(move || {
+        let st = app.state::<Shared>();
+        st.accounts.cancel_sign_in();
+        Ok(st.accounts.state())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn sign_out(app: AppHandle) -> Result<account::AccountState, PackError> {
+    blocking(move || {
+        let s = app.state::<Shared>().accounts.sign_out();
+        let _ = app.emit("account", json!({ "event": "signedOut", "state": s }));
+        Ok(s)
+    })
+    .await
+}
+
+/// The account's translations: `refresh` asks the server first (an error is returned in `error`, and the cached list
+/// is still answered).
+#[tauri::command]
+async fn entitlements(app: AppHandle, refresh: bool) -> Result<Value, PackError> {
+    blocking(move || {
+        let st = app.state::<Shared>();
+        let error = if refresh && st.accounts.state().status == "signedIn" { st.accounts.refresh().err() } else { None };
+        let snap = st.accounts.snapshot();
+        Ok(json!({ "state": snap.state, "issuedAt": snap.issued_at, "expiresAt": snap.expires_at, "items": snap.items, "error": error }))
+    })
+    .await
+}
+
+#[tauri::command]
+async fn store_list(app: AppHandle) -> Result<Value, PackError> {
+    blocking(move || Ok(app.state::<Shared>().store_list())).await
+}
+
+/// Starts a hosted checkout for a paid translation and returns its address (open it with `open_url`). After
+/// paying, the server's webhook adds the translation to the account; `entitlements(true)` then shows it.
+#[tauri::command]
+async fn start_checkout(app: AppHandle, game_id: String) -> Result<Value, PackError> {
+    blocking(move || {
+        let st = app.state::<Shared>();
+        let g = st.game(&game_id)?;
+        if !g.paid {
+            return Err(err("NOT_FOR_SALE", "This translation is free"));
+        }
+        Ok(json!({ "url": st.accounts.start_checkout(&game_id)? }))
+    })
+    .await
+}
+
 // ---------- posters ----------
 
 fn steam_cdn(app_id: &str, kind: &str) -> Vec<String> {
@@ -667,7 +860,7 @@ fn poster_response(app: &AppHandle, path: &str) -> tauri::http::Response<Vec<u8>
     match bytes {
         Some(b) => {
             let mime = if b.starts_with(&[0x89, b'P', b'N', b'G']) { "image/png" } else if b.starts_with(b"RIFF") { "image/webp" } else { "image/jpeg" };
-            tauri::http::Response::builder().header("Content-Type", mime).header("Cache-Control", "max-age=86400").body(b).unwrap()
+            tauri::http::Response::builder().header("Content-Type", mime).header("Cache-Control", "max-age=86400").header("Access-Control-Allow-Origin", "*").body(b).unwrap()
         }
         None => tauri::http::Response::builder().status(404).body(Vec::new()).unwrap(),
     }
@@ -719,10 +912,19 @@ pub fn run(dev: bool) {
                 steam_ids: Mutex::new(HashMap::new()),
                 sessions: Mutex::new(HashSet::new()),
                 exit_after: AtomicBool::new(false),
+                accounts: Accounts::new(
+                    &data,
+                    account::Config::from_build(),
+                    Box::new(account::KeyringStore::new("Tirgumim Launcher", if dev { "session-dev" } else { "session" })),
+                    Box::new(account::UreqHttp::default()),
+                ),
+                sign_in_polling: AtomicBool::new(false),
             });
             // Needs the catalog (process names), so after a first load, off the window's thread.
             let handle = app.handle().clone();
             std::thread::spawn(move || {
+                // Signed in: a fresh entitlement list first (offline, the cached one is used).
+                handle.state::<Shared>().accounts.refresh_if_stale();
                 handle.state::<Shared>().refresh_catalog(false);
                 recover_swaps(&handle);
             });
@@ -738,7 +940,8 @@ pub fn run(dev: bool) {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![app_info, list, play, close_when_game_exits, install, update, uninstall, pick_folder, open_folder, open_url, get_settings, set_settings])
+        .invoke_handler(tauri::generate_handler![app_info, list, play, close_when_game_exits, install, update, uninstall, pick_folder, open_folder, open_url, get_settings, set_settings,
+            account_state, sign_in, cancel_sign_in, sign_out, entitlements, store_list, start_checkout])
         .run(tauri::generate_context!())
         .expect("error while running the launcher");
 }

@@ -90,6 +90,20 @@ function More({ items, disabled }: { items: { label: string; icon: string; dange
   )
 }
 
+export interface MainAction { label: string; icon: string; onClick: () => void; disabled?: boolean }
+
+/** The one big button a translated game gets, wherever it is shown (home stage, game page). */
+export function mainAction(g: Game, busy: boolean, onAct: (kind: Act) => void, onPick: () => void): MainAction | null {
+  const blocked = busy || !!g.running || g.needs.length > 0
+  if (g.status === 'ready') return { label: 'התקנת התרגום', icon: ICON.download, onClick: () => onAct('install'), disabled: blocked }
+  if (g.status === 'updateAvailable') return { label: `עדכון לגרסה ${g.available?.version ?? ''}`, icon: ICON.update, onClick: () => onAct('update'), disabled: blocked }
+  if (g.status === 'needsRepair') return { label: 'התקנה מחדש', icon: ICON.update, onClick: () => onAct('update'), disabled: blocked || !g.available }
+  if (g.status === 'notFound') return { label: 'בחירת תיקיית המשחק', icon: ICON.folder, onClick: onPick, disabled: busy }
+  if (g.status === 'installed' && g.launchOnly) return { label: 'שחק בעברית', icon: ICON.play, onClick: () => onAct('play'), disabled: busy || !!g.running }
+  if (g.status === 'playing') return { label: 'המשחק פועל בעברית', icon: ICON.play, onClick: () => {}, disabled: true }
+  return null
+}
+
 export function GamePage({ g, busy, progress, onBack, onAct, onPick, onOpenFolder, onOpenUrl }: {
   g: Game
   busy: boolean
@@ -101,15 +115,7 @@ export function GamePage({ g, busy, progress, onBack, onAct, onPick, onOpenFolde
   onOpenUrl: (url: string) => void
 }) {
   const mine = progress && progress.gameId === g.id ? progress : null
-  const blocked = busy || !!g.running || g.needs.length > 0
-
-  let main: { label: string; icon: string; onClick: () => void; disabled?: boolean } | null = null
-  if (g.status === 'ready') main = { label: 'התקנת התרגום', icon: ICON.download, onClick: () => onAct('install'), disabled: blocked }
-  else if (g.status === 'updateAvailable') main = { label: `עדכון לגרסה ${g.available?.version ?? ''}`, icon: ICON.update, onClick: () => onAct('update'), disabled: blocked }
-  else if (g.status === 'needsRepair') main = { label: 'התקנה מחדש', icon: ICON.update, onClick: () => onAct('update'), disabled: blocked || !g.available }
-  else if (g.status === 'notFound') main = { label: 'בחירת תיקיית המשחק', icon: ICON.folder, onClick: onPick, disabled: busy }
-  else if (g.status === 'installed' && g.launchOnly) main = { label: 'שחק בעברית', icon: ICON.play, onClick: () => onAct('play'), disabled: busy || !!g.running }
-  else if (g.status === 'playing') main = { label: 'המשחק פועל בעברית', icon: ICON.play, onClick: () => {}, disabled: true }
+  const main = mainAction(g, busy, onAct, onPick)
 
   const more = [
     ...(g.location ? [{ label: 'פתיחת תיקיית המשחק', icon: ICON.folder, onClick: onOpenFolder }] : []),

@@ -39,5 +39,9 @@ jobs:
       - name: Tests
         run: npm test
 
+      - name: Account server tests
+        working-directory: server
+        run: npm test
+
       - name: Window type check and build
         run: npm run build

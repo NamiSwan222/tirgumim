@@ -30,6 +30,8 @@ export const ICON = {
   prev: '',
   play: '\uE768',
   game: '',
+  store: '',
+  account: '',
 }
 
 export function Icon({ g, className }: { g: string; className?: string }) {

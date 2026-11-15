@@ -109,8 +109,12 @@ impl Discovery {
     }
 }
 
-/// A repo's entry gets its pack from the repo's own releases unless it says otherwise.
+/// A repo's entry gets its pack from the repo's own releases unless it says otherwise. A paid entry doesn't: its
+/// pack comes from the account server only (ENTITLEMENTS.md), never from public releases.
 fn fill_pack(e: &mut Value, repo: &str) {
+    if e.get("paid").and_then(Value::as_bool) == Some(true) {
+        return;
+    }
     match e.get_mut("pack") {
         Some(Value::Object(p)) => {
             if !p.contains_key("github") && !p.contains_key("url") {
@@ -187,5 +191,15 @@ mod tests {
 
         let merged = merge(vec![CatalogGame { id: "game-a".into(), name: "Old A".into(), ..Default::default() }, CatalogGame { id: "c".into(), name: "C".into(), ..Default::default() }], found.games);
         assert_eq!(merged.iter().map(|g| (g.id.as_str(), g.name.as_str())).collect::<Vec<_>>(), [("c", "C"), ("game-a", "Game A"), ("game-b", "Game B")]);
+    }
+
+    #[test]
+    fn paid_entries_get_no_public_pack() {
+        let mut free = json!({ "id": "a", "name": "A" });
+        fill_pack(&mut free, "o/a");
+        assert_eq!(free["pack"]["github"], "o/a");
+        let mut paid = json!({ "id": "b", "name": "B", "paid": true });
+        fill_pack(&mut paid, "o/b");
+        assert!(paid.get("pack").is_none());
     }
 }

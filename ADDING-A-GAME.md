@@ -44,3 +44,9 @@ does, the pack sets `minLauncherVersion` and older launchers say "update the lau
 catalog entry with the same `id`. Only repos of `NamiSwan222` count, whatever topics others use.
 
 Run the game-translation risk check first (free-only vs paid).
+
+**A paid translation** (only after the risk check says it may be sold): the entry gets `"paid": true`,
+`"minLauncherVersion"` of the first launcher with accounts, and no `pack`. Keep its repo **private** (a public repo
+gives away the translation files) and put the entry in `catalog/catalog.json` instead (discovery only sees public
+repos); never publish the zip as a public release. The zip goes to the account server (`PUT /v1/admin/packs/<gameId>`) and its price to
+`PUT /v1/admin/products/<gameId>`. See ENTITLEMENTS.md.

@@ -1,0 +1,15 @@
+{
+  "name": "tirgumim-account-server",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Reference account server for the Tirgumim launcher: email sign-in, signed entitlements, hosted checkout webhooks, download grants (see ../ENTITLEMENTS.md)",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/server.js",
+    "test": "node --test",
+    "keygen": "node scripts/keygen.mjs"
+  }
+}

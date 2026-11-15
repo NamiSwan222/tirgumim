@@ -281,7 +281,8 @@ page with wide art fading into a blurred copy, four fact boxes, one main button 
 status bar, which shows where the catalog came from.
 
 ## 8. Later
-- Accounts / paid packs: `requiresAccount` packs will need a signed download URL
-  from our server instead of a public GitHub link. Pack format stays the same.
+- Accounts / paid packs: designed and built (launcher side and a reference server), see ENTITLEMENTS.md. Catalog
+  entries get optional `paid` / `priceId`; a paid pack comes only through a signed, short-lived download grant from
+  the account server, never a public GitHub link. Pack format stays the same.
 - Signed catalog (ed25519) so a hijacked GitHub account can't push malicious packs.
 - Launcher self-update (Tauri updater, signed with an offline key).
