@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated": "2026-11-14",
+  "updated": "2026-11-15",
   "games": [
     {
       "id": "undertale",
@@ -20,6 +20,27 @@
         "github": "NamiSwan222/undertale-hebrew",
         "tag": "undertale-*",
         "asset": "undertale-he-*.zip"
+      },
+      "requires": []
+    },
+    {
+      "id": "yugioh-lotd",
+      "name": "Yu-Gi-Oh! Legacy of the Duelist",
+      "nameHe": "יו-גי-הו! מורשת הדואליסט",
+      "engine": "PhyreEngine",
+      "aboutHe": "תרגום מלא לעברית: תפריטים, כל 7,580 הקלפים, מצב הסיפור, ההדרכות והעזרה. לגרסת Steam המקורית (2016). העברית פעילה רק כשמפעילים את המשחק מהמשגר.",
+      "detect": {
+        "steamAppId": "480650",
+        "epicAppName": null,
+        "markerFile": "YuGiOh.exe",
+        "processNames": [
+          "YuGiOh.exe"
+        ]
+      },
+      "pack": {
+        "github": "NamiSwan222/tirgumim-yugioh-lotd-he",
+        "tag": "yugioh-lotd-*",
+        "asset": "yugioh-lotd-he-*.zip"
       },
       "requires": []
     }
