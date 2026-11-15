@@ -85,12 +85,11 @@ function Banner({ games, onOpen }: { games: Game[]; onOpen: (g: Game) => void })
       <BannerArt key={g.id} hero={g.hero} cover={g.cover} />
       <div className="banner-fade" />
       <div className="banner-text">
-        <div className="eyebrow">{g.available ? 'תרגום לעברית' : 'תרגום בדרך'}</div>
-        <h1>{title(g)}</h1>
         {g.nameHe && <div className="en">{g.name}</div>}
-        {g.aboutHe && <p>{g.aboutHe}</p>}
+        <h1>{title(g)}</h1>
         <StatusPill g={g} />
       </div>
+      {g.aboutHe && <p key={g.id} className="subtitle">{g.aboutHe}</p>}
       {games.length > 1 && (
         <div className="dots" onClick={(e) => e.stopPropagation()}>
           {games.map((x, n) => <button key={x.id} className={n === i % games.length ? 'on' : ''} onClick={() => setI(n)} aria-label={title(x)} />)}
@@ -299,7 +298,7 @@ export default function App() {
     if (query.trim()) {
       return (
         <div className="page list-page">
-          <h1 className="page-title">חיפוש: <span dir="auto">{query}</span></h1>
+          <h1 className="page-title">חיפוש: <span className="query" dir="auto">{query}</span></h1>
           {gFiltered.length > 0 && <><h2 className="sub">התרגומים שלנו</h2><div className="grid">{gFiltered.map((g) => <GameCard key={g.id} g={g} onOpen={() => openGame(g)} />)}</div></>}
           {oFiltered.length > 0 && <><h2 className="sub">משחקים במחשב</h2><div className="grid tiles">{oFiltered.map((o) => <PcTile key={o.store + o.id} o={o} onOpen={() => openPc(o)} />)}</div></>}
           {!gFiltered.length && !oFiltered.length && <Empty text="לא נמצא משחק בשם הזה." />}
@@ -393,7 +392,7 @@ export default function App() {
             </button>
           ))}
           <div className="grow" />
-          <button className="nav" onClick={openSettings}><Icon g={ICON.settings} /><span>הגדרות</span></button>
+          <button className="nav settings" onClick={openSettings}><Icon g={ICON.settings} /><span>הגדרות</span></button>
         </nav>
         <main ref={mainRef}>{content}</main>
       </div>
@@ -410,8 +409,8 @@ export default function App() {
       <footer className="statusbar">
         <span className={`dot ${lib?.catalog.source ?? ''}`} />
         <span title={lib?.catalog.error ?? ''}>{lib?.catalog.source ? CATALOG_SOURCE[lib.catalog.source] : 'טוען…'}</span>
-        {lib && <span className="sep">{games.length} תרגומים · {others.length} משחקים במחשב</span>}
-        {progGame && <span className="sep busy-note">{title(progGame)}: עובד…</span>}
+        {lib && <span>{games.length} תרגומים, {others.length} משחקים במחשב</span>}
+        {progGame && <span className="busy-note">{title(progGame)}: עובד…</span>}
         <span className="grow" />
         <span className="hint" title="המשגר בודק ב-GitHub כל 10 דקות. כדי לבדוק עכשיו, לחצו Ctrl+F5.">תרגום חדש לא מופיע? <kbd dir="ltr">Ctrl+F5</kbd></span>
         {info?.dev && <span className="dev">מצב בדיקה</span>}
@@ -421,7 +420,7 @@ export default function App() {
             <span>{self.state === 'checking' ? 'בודק…' : 'בדוק עדכונים'}</span>
           </button>
         )}
-        {info && <span dir="ltr">Tirgumim {info.version}</span>}
+        {info && <span className="ver" dir="ltr">Tirgumim {info.version}</span>}
       </footer>
 
       {confirm && (

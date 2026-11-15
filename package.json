@@ -18,6 +18,8 @@
     "publish-launcher": "node scripts/publish-launcher.mjs"
   },
   "dependencies": {
+    "@fontsource/assistant": "^5.3.0",
+    "@fontsource/karantina": "^5.3.0",
     "@tauri-apps/api": "^2.12.4",
     "@tauri-apps/plugin-dialog": "^2.8.4",
     "@tauri-apps/plugin-process": "^2.4.0",
