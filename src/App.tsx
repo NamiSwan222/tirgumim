@@ -2,18 +2,22 @@
 // status bar, and the dialogs.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { api, asError, type Game, type Library, type PcGame, type Progress } from './api.ts'
+import { accountApi, api, asError, type AccountState, type Game, type Library, type PcGame, type Progress, type Store } from './api.ts'
 import { GamePage, PcGamePage, type Act } from './GamePage.tsx'
-import { GameCard, Icon, ICON, PcTile, Shelf, StatusPill } from './ui.tsx'
+import { Home } from './Home.tsx'
+import { StorePage } from './Store.tsx'
+import { colorVars, useGameColor } from './color.ts'
+import { GameCard, Icon, ICON, PcTile } from './ui.tsx'
 import { CATALOG_SOURCE, errorText, title } from './texts.ts'
 import { useSelfUpdate } from './updater.ts'
 
-type Cat = 'home' | 'ours' | 'installed' | 'updates' | 'soon' | 'pc'
+type Cat = 'home' | 'store' | 'ours' | 'installed' | 'updates' | 'soon' | 'pc'
 type Page = { kind: 'cat'; cat: Cat } | { kind: 'game'; id: string } | { kind: 'pc'; store: string; id: string }
 
 const CATS: { id: Cat; label: string; icon: string }[] = [
   { id: 'home', label: 'בית', icon: ICON.home },
-  { id: 'ours', label: 'התרגומים שלנו', icon: ICON.library },
+  { id: 'store', label: 'חנות', icon: ICON.store },
+  { id: 'ours', label: 'הספרייה שלי', icon: ICON.library },
   { id: 'installed', label: 'מותקנים אצלי', icon: ICON.installed },
   { id: 'updates', label: 'עדכונים', icon: ICON.update },
   { id: 'soon', label: 'בקרוב', icon: ICON.progress },
@@ -22,6 +26,8 @@ const CATS: { id: Cat; label: string; icon: string }[] = [
 
 interface Toast { id: number; text: string; kind: 'ok' | 'error' | 'info' }
 
+/** A paid translation is in the library only for accounts that own it (or already have it installed); free ones always. */
+const inLibrary = (g: Game) => !g.paid || g.access === 'owned' || !!g.installed
 const isInstalled = (g: Game) => !!g.installed
 const hasUpdate = (g: Game) => g.status === 'updateAvailable' || g.status === 'needsRepair'
 const isSoon = (g: Game) => g.inProgress && !g.available
@@ -59,47 +65,6 @@ function TitleBar({ query, setQuery, searchRef, onRefresh, refreshing }: {
   )
 }
 
-/** The wide art, or, for a game without one, its cover blurred behind a sharp copy. */
-function BannerArt({ hero, cover }: { hero: string; cover: string }) {
-  const [heroFailed, setHeroFailed] = useState(false)
-  if (!heroFailed) return <div className="banner-art"><img src={hero} alt="" draggable={false} onError={() => setHeroFailed(true)} /></div>
-  return (
-    <div className="banner-art no-hero">
-      <img className="blurred" src={cover} alt="" draggable={false} onError={(e) => (e.currentTarget.style.display = 'none')} />
-      <img className="sharp" src={cover} alt="" draggable={false} onError={(e) => (e.currentTarget.style.display = 'none')} />
-    </div>
-  )
-}
-
-function Banner({ games, onOpen }: { games: Game[]; onOpen: (g: Game) => void }) {
-  const [i, setI] = useState(0)
-  useEffect(() => {
-    if (games.length < 2) return
-    const t = setInterval(() => setI((x) => (x + 1) % games.length), 8000)
-    return () => clearInterval(t)
-  }, [games.length])
-  const g = games[i % Math.max(1, games.length)]
-  if (!g) return null
-  return (
-    <div className="banner" onClick={() => onOpen(g)} role="button" tabIndex={0}>
-      <BannerArt key={g.id} hero={g.hero} cover={g.cover} />
-      <div className="banner-fade" />
-      <div className="banner-text">
-        <div className="eyebrow">{g.available ? 'תרגום לעברית' : 'תרגום בדרך'}</div>
-        <h1>{title(g)}</h1>
-        {g.nameHe && <div className="en">{g.name}</div>}
-        {g.aboutHe && <p>{g.aboutHe}</p>}
-        <StatusPill g={g} />
-      </div>
-      {games.length > 1 && (
-        <div className="dots" onClick={(e) => e.stopPropagation()}>
-          {games.map((x, n) => <button key={x.id} className={n === i % games.length ? 'on' : ''} onClick={() => setI(n)} aria-label={title(x)} />)}
-        </div>
-      )}
-    </div>
-  )
-}
-
 function Empty({ text }: { text: string }) {
   return <div className="empty"><Icon g={ICON.game} /><p>{text}</p></div>
 }
@@ -116,6 +81,11 @@ export default function App() {
   const [toasts, setToasts] = useState<Toast[]>([])
   const [confirm, setConfirm] = useState<{ title: string; body: string; ok: string; danger?: boolean; resolve: (v: boolean) => void } | null>(null)
   const [settings, setSettings] = useState<{ url: string; placeholder: string } | null>(null)
+  const [stageId, setStageId] = useState<string | null>(null)
+  const [account, setAccount] = useState<AccountState | null>(null)
+  const [store, setStore] = useState<Store | null>(null)
+  const [signIn, setSignIn] = useState<{ email: string; sending: boolean } | null>(null)
+  const checkoutPending = useRef(false)
   const searchRef = useRef<HTMLInputElement>(null)
   const mainRef = useRef<HTMLElement>(null)
 
@@ -154,6 +124,31 @@ export default function App() {
     }
   }, [toast])
 
+  const loadStore = useCallback(async () => {
+    try { setStore(await accountApi.storeList()) } catch (e) { toast(errorText(asError(e)), 'error') }
+  }, [toast])
+
+  useEffect(() => {
+    accountApi.accountState().then(setAccount).catch(() => {})
+    const un = accountApi.onAccount((e) => {
+      setAccount(e.state)
+      if (e.event === 'signedIn') { setSignIn(null); toast('התחברתם לחשבון.', 'ok') }
+      else if (e.event === 'signInExpired' || e.event === 'signInFailed') { setSignIn(null); toast(errorText(e.error ?? { code: 'AUTH_REQUEST_EXPIRED', message: '' }), 'error') }
+      load(false); loadStore()
+    })
+    // Back from the browser after paying: ask the server what the account owns now.
+    const focus = async () => {
+      if (!checkoutPending.current) return
+      try {
+        const ent = await accountApi.entitlements(true)
+        if (ent.items.some((x) => x.status === 'active')) { checkoutPending.current = false; toast('הרכישה אושרה. התרגום בספרייה שלכם.', 'ok') }
+      } catch { /* the next focus tries again */ }
+      load(false); loadStore()
+    }
+    window.addEventListener('focus', focus)
+    return () => { un.then((f) => f()); window.removeEventListener('focus', focus) }
+  }, [load, loadStore, toast])
+
   useEffect(() => {
     api.info().then(setInfo)
     load(false)
@@ -176,6 +171,8 @@ export default function App() {
     const t = setInterval(() => load(false), 15000)
     return () => { un.then((f) => f()); unS.then((f) => f()); unC.then((f) => f()); clearInterval(t) }
   }, [load])
+
+  useEffect(() => { if (page.kind === 'cat' && page.cat === 'store') loadStore() }, [page, loadStore])
 
   const go = (p: Page) => {
     setHistory((h) => [...h.slice(-20), page])
@@ -260,6 +257,34 @@ export default function App() {
     await load(false)
   }
 
+  async function buy(gameId: string) {
+    try {
+      const { url } = await accountApi.startCheckout(gameId)
+      checkoutPending.current = true
+      await api.openUrl(url)
+      toast('פתחנו את דף התשלום בדפדפן. אחרי התשלום חזרו לכאן, והתרגום יופיע בספרייה.', 'info')
+    } catch (e) {
+      toast(errorText(asError(e)), 'error')
+    }
+  }
+
+  async function submitSignIn() {
+    if (!signIn || !signIn.email.trim()) return
+    setSignIn({ ...signIn, sending: true })
+    try {
+      setAccount(await accountApi.signIn(signIn.email.trim()))
+    } catch (e) {
+      toast(errorText(asError(e)), 'error')
+    }
+    setSignIn((x) => (x ? { ...x, sending: false } : x))
+  }
+
+  async function signOut() {
+    setAccount(await accountApi.signOut())
+    await load(false)
+    await loadStore()
+  }
+
   async function openSettings() {
     const s = await api.getSettings()
     setSettings({ url: s.catalogUrl, placeholder: s.defaultCatalogUrl })
@@ -275,10 +300,11 @@ export default function App() {
     }
   }
 
-  const games = lib?.translations ?? []
+  const games = (lib?.translations ?? []).filter(inLibrary)
   const others = lib?.others ?? []
   const counts: Record<Cat, number | null> = {
     home: null,
+    store: null,
     ours: games.length,
     installed: games.filter(isInstalled).length,
     updates: games.filter(hasUpdate).length,
@@ -290,6 +316,11 @@ export default function App() {
     return [...games].sort((a, b) => order(a) - order(b)).slice(0, 5)
   }, [games])
 
+  // The stage shows the game you chose, else the one most worth your attention.
+  const stageGame = games.find((g) => g.id === stageId) ?? featured[0] ?? null
+  const pageGame = page.kind === 'game' ? games.find((g) => g.id === page.id) : null
+  const tint = useGameColor(((page.kind === 'cat' && page.cat === 'home') ? stageGame : pageGame)?.hero)
+
   const gFiltered = games.filter((g) => matches(query, g.name, g.nameHe))
   const oFiltered = others.filter((o) => matches(query, o.name))
   const openGame = (g: Game) => go({ kind: 'game', id: g.id })
@@ -299,7 +330,7 @@ export default function App() {
     if (query.trim()) {
       return (
         <div className="page list-page">
-          <h1 className="page-title">חיפוש: <span dir="auto">{query}</span></h1>
+          <h1 className="page-title">חיפוש: <span className="query" dir="auto">{query}</span></h1>
           {gFiltered.length > 0 && <><h2 className="sub">התרגומים שלנו</h2><div className="grid">{gFiltered.map((g) => <GameCard key={g.id} g={g} onOpen={() => openGame(g)} />)}</div></>}
           {oFiltered.length > 0 && <><h2 className="sub">משחקים במחשב</h2><div className="grid tiles">{oFiltered.map((o) => <PcTile key={o.store + o.id} o={o} onOpen={() => openPc(o)} />)}</div></>}
           {!gFiltered.length && !oFiltered.length && <Empty text="לא נמצא משחק בשם הזה." />}
@@ -307,26 +338,12 @@ export default function App() {
       )
     }
     if (cat === 'home') {
-      const mine = games.filter((g) => g.installed || g.location)
       return (
-        <div className="page home">
-          <Banner games={featured} onOpen={openGame} />
-          {mine.length > 0 && (
-            <Shelf heading="המשחקים שלך עם תרגום" count={mine.length}>
-              {mine.map((g) => <GameCard key={g.id} g={g} onOpen={() => openGame(g)} />)}
-            </Shelf>
-          )}
-          <Shelf heading="התרגומים שלנו" count={games.length} onAll={() => go({ kind: 'cat', cat: 'ours' })}>
-            {games.map((g) => <GameCard key={g.id} g={g} onOpen={() => openGame(g)} />)}
-          </Shelf>
-          {others.length > 0 && (
-            <Shelf heading="משחקים במחשב שלך" count={others.length} onAll={() => go({ kind: 'cat', cat: 'pc' })}>
-              {others.slice(0, 40).map((o) => <PcTile key={o.store + o.id} o={o} onOpen={() => openPc(o)} />)}
-            </Shelf>
-          )}
-        </div>
+        <Home games={games} othersCount={others.length} selected={stageGame} onSelect={(g) => setStageId(g.id)} busy={busy} progress={progress}
+          onOpen={openGame} onAct={(k, g) => act(k, g)} onPick={pick} onShowPc={() => go({ kind: 'cat', cat: 'pc' })} />
       )
     }
+    if (cat === 'store') return <StorePage store={store} account={account} onBuy={buy} onSignIn={() => setSignIn({ email: '', sending: false })} onReload={loadStore} />
     const label = CATS.find((c) => c.id === cat)!.label
     if (cat === 'pc') {
       return (
@@ -364,7 +381,7 @@ export default function App() {
   const progGame = progress && games.find((g) => g.id === progress.gameId)
 
   return (
-    <div className="app">
+    <div className="app" style={colorVars(tint)}>
       <TitleBar query={query} setQuery={setQuery} searchRef={searchRef} onRefresh={refresh} refreshing={refreshing} />
       {self.version && ['available', 'downloading', 'ready', 'installing'].includes(self.state) && (
         <div className={`update-banner ${self.state}`} role="status">
@@ -393,7 +410,14 @@ export default function App() {
             </button>
           ))}
           <div className="grow" />
-          <button className="nav" onClick={openSettings}><Icon g={ICON.settings} /><span>הגדרות</span></button>
+          {account?.configured && (
+            <button className="nav account" onClick={() => (account.status === 'signedIn' ? signOut() : setSignIn({ email: '', sending: false }))}
+              title={account.status === 'signedIn' ? 'לחצו כדי להתנתק' : ''}>
+              <Icon g={ICON.account} />
+              <span dir="auto">{account.status === 'signedIn' ? account.email : 'התחברות'}</span>
+            </button>
+          )}
+          <button className="nav settings" onClick={openSettings}><Icon g={ICON.settings} /><span>הגדרות</span></button>
         </nav>
         <main ref={mainRef}>{content}</main>
       </div>
@@ -410,8 +434,8 @@ export default function App() {
       <footer className="statusbar">
         <span className={`dot ${lib?.catalog.source ?? ''}`} />
         <span title={lib?.catalog.error ?? ''}>{lib?.catalog.source ? CATALOG_SOURCE[lib.catalog.source] : 'טוען…'}</span>
-        {lib && <span className="sep">{games.length} תרגומים · {others.length} משחקים במחשב</span>}
-        {progGame && <span className="sep busy-note">{title(progGame)}: עובד…</span>}
+        {lib && <span>{games.length} תרגומים, {others.length} משחקים במחשב</span>}
+        {progGame && <span className="busy-note">{title(progGame)}: עובד…</span>}
         <span className="grow" />
         <span className="hint" title="המשגר בודק ב-GitHub כל 10 דקות. כדי לבדוק עכשיו, לחצו Ctrl+F5.">תרגום חדש לא מופיע? <kbd dir="ltr">Ctrl+F5</kbd></span>
         {info?.dev && <span className="dev">מצב בדיקה</span>}
@@ -421,7 +445,7 @@ export default function App() {
             <span>{self.state === 'checking' ? 'בודק…' : 'בדוק עדכונים'}</span>
           </button>
         )}
-        {info && <span dir="ltr">Tirgumim {info.version}</span>}
+        {info && <span className="ver" dir="ltr">Tirgumim {info.version}</span>}
       </footer>
 
       {confirm && (
@@ -432,6 +456,31 @@ export default function App() {
             <div className="dialog-actions">
               <button className={`btn ${confirm.danger ? 'danger' : 'primary'}`} autoFocus onClick={() => { confirm.resolve(true); setConfirm(null) }}>{confirm.ok}</button>
               <button className="btn ghost" onClick={() => { confirm.resolve(false); setConfirm(null) }}>ביטול</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {signIn && (
+        <div className="scrim" onMouseDown={() => { accountApi.cancelSignIn(); setSignIn(null) }}>
+          <div className="dialog" role="dialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
+            <h2>התחברות</h2>
+            {account?.status === 'pending' && account.pending ? (
+              <>
+                <p>שלחנו קישור אל <strong dir="ltr">{account.pending.email}</strong>. פתחו אותו ואשרו שהקוד הזה מופיע גם שם:</p>
+                <div className="code" dir="ltr">{account.pending.code}</div>
+                <small className="check-note">אפשר להשאיר את החלון פתוח. ההתחברות תושלם לבד.</small>
+              </>
+            ) : (
+              <form className="field" onSubmit={(e) => { e.preventDefault(); submitSignIn() }}>
+                <span>האימייל שלכם</span>
+                <input dir="ltr" type="email" autoFocus value={signIn.email} onChange={(e) => setSignIn({ ...signIn, email: e.target.value })} placeholder="name@example.com" spellCheck={false} />
+                <small>נשלח אליו קישור כניסה. אין סיסמה.</small>
+              </form>
+            )}
+            <div className="dialog-actions">
+              {account?.status !== 'pending' && <button className="btn primary" disabled={signIn.sending || !signIn.email.trim()} onClick={submitSignIn}>שליחת קישור</button>}
+              <button className="btn ghost" onClick={() => { accountApi.cancelSignIn(); setSignIn(null) }}>ביטול</button>
             </div>
           </div>
         </div>

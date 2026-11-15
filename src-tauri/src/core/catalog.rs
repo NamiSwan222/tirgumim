@@ -98,6 +98,16 @@ pub struct CatalogGame {
     /// "update the launcher" instead of offering an install that can't work.
     #[serde(default)]
     pub min_launcher_version: Option<String>,
+    /// A paid translation (launcher 0.5.0+): only accounts that own it (bought, or approved by us) can install,
+    /// update or play it. Its pack comes from the account server through a signed, short-lived download grant,
+    /// never from a public link (see ENTITLEMENTS.md). Older launchers ignore this, so a paid entry has no
+    /// `pack` and sets `minLauncherVersion`.
+    #[serde(default)]
+    pub paid: bool,
+    /// The payment provider's price for it (a Stripe Price id or another provider's). Only a hint: the amount and
+    /// the price actually charged come from the account server.
+    #[serde(default)]
+    pub price_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -395,7 +405,7 @@ pub fn download(url: &str, dest_dir: &Path, progress: &mut dyn FnMut(Option<f64>
     if url.starts_with("file:") {
         return url::Url::parse(url).map_err(|e| e.to_string())?.to_file_path().map_err(|_| format!("Bad file URL {url}"));
     }
-    if !url.starts_with("https://") {
+    if !url.starts_with("https://") && !util::dev_local_http(url) {
         return Err("Packs are downloaded only over https".into());
     }
     fs::create_dir_all(dest_dir).map_err(|e| e.to_string())?;
@@ -482,6 +492,24 @@ mod tests {
         assert_eq!(pick_release_for(&only_new, &src, "0.3.0").unwrap_err(), "Needs launcher 0.4.0 or newer");
         assert_eq!(release_min_launcher("x\ntirgumim-min-launcher: 0.4.0\ny").as_deref(), Some("0.4.0"));
         assert_eq!(release_min_launcher("nothing here"), None);
+    }
+
+    #[test]
+    fn paid_fields_are_optional() {
+        use crate::core::entitlements::{ListState, Snapshot};
+        // Our real catalog: every game is free and passes the gate with no account and no server.
+        let text = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../catalog/catalog.json")).unwrap();
+        let c = parse_catalog(&text, "https://example.org/catalog.json").unwrap();
+        assert!(!c.games.is_empty());
+        for g in &c.games {
+            assert!(!g.paid && g.price_id.is_none(), "{}", g.id);
+            for st in [ListState::NotConfigured, ListState::SignedOut, ListState::Expired, ListState::ClockChanged] {
+                assert!(Snapshot::plain(st).check(g.paid, &g.id).is_ok());
+            }
+        }
+        let paid = parse_catalog(r#"{"schema":1,"games":[{"id":"paid-game","name":"P","paid":true,"priceId":"price_1"}]}"#, "https://e/c.json").unwrap();
+        assert!(paid.games[0].paid);
+        assert_eq!(paid.games[0].price_id.as_deref(), Some("price_1"));
     }
 
     #[test]

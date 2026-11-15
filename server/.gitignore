@@ -1,0 +1,4 @@
+.env
+data/
+packs/
+node_modules/

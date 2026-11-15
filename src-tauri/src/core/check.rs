@@ -9,6 +9,9 @@ use super::util::wildcard;
 /// Our own repository: launcher releases (`v*`) and the updater's `updater` release live here too.
 pub const OWN_REPO: &str = "NamiSwan222/tirgumim";
 
+/// The first launcher that knows `paid` (and so gates it). Paid entries must ask for at least this one.
+pub const PAID_MIN_LAUNCHER: &str = "0.5.0";
+
 #[derive(Debug, Default)]
 pub struct Report {
     pub errors: Vec<String>,
@@ -82,6 +85,22 @@ pub fn check_offline(text: &str) -> (Option<Catalog>, Report) {
         }
         if g.status.as_deref().is_some_and(|s| s != "inProgress") {
             r.err(id, format!("unknown status \"{}\" (only \"inProgress\")", g.status.as_deref().unwrap_or("")));
+        }
+        if g.paid {
+            // Older launchers don't know `paid`: a public pack would be free to them, and to anyone with a browser.
+            if g.pack.is_some() {
+                r.err(id, "a paid translation has no pack entry: its pack comes from the account server (ENTITLEMENTS.md)");
+            }
+            if g.min_launcher_version.as_deref().is_none_or(|m| crate::core::util::compare_versions(m, PAID_MIN_LAUNCHER).is_lt()) {
+                r.err(id, format!("a paid translation needs \"minLauncherVersion\": \"{PAID_MIN_LAUNCHER}\" or newer"));
+            }
+            if g.price_id.as_deref().is_some_and(|p| p.trim().is_empty()) {
+                r.err(id, "priceId is empty: leave it out until the price exists");
+            }
+            continue;
+        }
+        if g.price_id.is_some() {
+            r.warn(id, "priceId on a free translation is ignored");
         }
         match &g.pack {
             None => {
@@ -175,6 +194,24 @@ mod tests {
         assert!(!check(game(json!({ "pack": { "github": OWN_REPO, "asset": "*.zip" } }))).errors.is_empty());
         assert!(!check(game(json!({ "pack": { "github": OWN_REPO, "tag": "*", "asset": "*.zip" } }))).errors.is_empty());
         assert!(check(game(json!({ "pack": { "github": OWN_REPO, "tag": "my-game-*", "asset": "my-game-he-*.zip" } }))).errors.is_empty());
+    }
+
+    #[test]
+    fn paid_entries() {
+        let paid = json!({ "paid": true, "pack": null, "minLauncherVersion": PAID_MIN_LAUNCHER, "priceId": "price_123" });
+        let r = check(game(paid.clone()));
+        assert!(r.errors.is_empty(), "{r:?}");
+        // a public pack would give it away
+        let mut public = paid.clone();
+        public.as_object_mut().unwrap().remove("pack");
+        let mut with_pack = game(public);
+        assert!(!check(with_pack.clone()).errors.is_empty());
+        // older launchers would ignore "paid"
+        with_pack["games"][0].as_object_mut().unwrap().remove("pack");
+        with_pack["games"][0]["minLauncherVersion"] = json!("0.4.1");
+        assert!(!check(with_pack).errors.is_empty());
+        // the free entries are unchanged
+        assert!(check(game(json!({}))).errors.is_empty());
     }
 
     #[test]

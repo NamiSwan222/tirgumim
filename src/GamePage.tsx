@@ -26,12 +26,40 @@ function Hero({ hero, cover, label, children }: { hero: string; cover: string; l
 
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <div className="stat">
-      <div className="stat-label">{label}</div>
-      <div className="stat-value">{value || '—'}</div>
-      {sub && <div className="stat-sub">{sub}</div>}
+    <div className="fact">
+      <dt>{label}</dt>
+      <dd>{value || '—'}{sub && <span className="fact-sub">{sub}</span>}</dd>
     </div>
   )
+}
+
+/** A line with any Hebrew in it reads right to left; one without (an English section) left to right. */
+const dirOf = (s: string) => (/[֐-׿]/.test(s) ? 'rtl' : 'ltr')
+
+/** Release notes are written in Markdown on GitHub. Show their headings, lists and paragraphs, without the marks. */
+function Changelog({ text }: { text: string }) {
+  const clean = (s: string) => s.replace(/\*\*|__|`/g, '').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').trim()
+  const out: React.ReactNode[] = []
+  let list: string[] = []
+  let para: string[] = []
+  const flush = () => {
+    if (para.length) out.push(<p key={out.length} dir={dirOf(para.join(' '))}>{para.join(' ')}</p>)
+    if (list.length) out.push(<ul key={out.length} dir={dirOf(list.join(' '))}>{list.map((l, i) => <li key={i} dir={dirOf(l)}>{l}</li>)}</ul>)
+    para = []; list = []
+  }
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (/^tirgumim-min-launcher:/i.test(line)) continue
+    if (!line) { flush(); continue }
+    if (/^([-*_])\1{2,}$/.test(line)) { flush(); out.push(<hr key={out.length} />); continue }
+    const h = line.match(/^#{1,6}\s+(.*)$/) ?? line.match(/^\*\*([^*]+)\*\*:?$/)
+    const li = line.match(/^[-*+]\s+(.*)$/)
+    if (h) { flush(); out.push(<h4 key={out.length} dir={dirOf(h[1])}>{clean(h[1])}</h4>) }
+    else if (li) { if (para.length) { const p = para; para = []; out.push(<p key={out.length} dir={dirOf(p.join(' '))}>{p.join(' ')}</p>) } list.push(clean(li[1])) }
+    else { if (list.length) flush(); para.push(clean(line)) }
+  }
+  flush()
+  return <div className="changelog">{out}</div>
 }
 
 function More({ items, disabled }: { items: { label: string; icon: string; danger?: boolean; onClick: () => void }[]; disabled: boolean }) {
@@ -62,6 +90,20 @@ function More({ items, disabled }: { items: { label: string; icon: string; dange
   )
 }
 
+export interface MainAction { label: string; icon: string; onClick: () => void; disabled?: boolean }
+
+/** The one big button a translated game gets, wherever it is shown (home stage, game page). */
+export function mainAction(g: Game, busy: boolean, onAct: (kind: Act) => void, onPick: () => void): MainAction | null {
+  const blocked = busy || !!g.running || g.needs.length > 0
+  if (g.status === 'ready') return { label: 'התקנת התרגום', icon: ICON.download, onClick: () => onAct('install'), disabled: blocked }
+  if (g.status === 'updateAvailable') return { label: `עדכון לגרסה ${g.available?.version ?? ''}`, icon: ICON.update, onClick: () => onAct('update'), disabled: blocked }
+  if (g.status === 'needsRepair') return { label: 'התקנה מחדש', icon: ICON.update, onClick: () => onAct('update'), disabled: blocked || !g.available }
+  if (g.status === 'notFound') return { label: 'בחירת תיקיית המשחק', icon: ICON.folder, onClick: onPick, disabled: busy }
+  if (g.status === 'installed' && g.launchOnly) return { label: 'שחק בעברית', icon: ICON.play, onClick: () => onAct('play'), disabled: busy || !!g.running }
+  if (g.status === 'playing') return { label: 'המשחק פועל בעברית', icon: ICON.play, onClick: () => {}, disabled: true }
+  return null
+}
+
 export function GamePage({ g, busy, progress, onBack, onAct, onPick, onOpenFolder, onOpenUrl }: {
   g: Game
   busy: boolean
@@ -73,15 +115,7 @@ export function GamePage({ g, busy, progress, onBack, onAct, onPick, onOpenFolde
   onOpenUrl: (url: string) => void
 }) {
   const mine = progress && progress.gameId === g.id ? progress : null
-  const blocked = busy || !!g.running || g.needs.length > 0
-
-  let main: { label: string; icon: string; onClick: () => void; disabled?: boolean } | null = null
-  if (g.status === 'ready') main = { label: 'התקנת התרגום', icon: ICON.download, onClick: () => onAct('install'), disabled: blocked }
-  else if (g.status === 'updateAvailable') main = { label: `עדכון לגרסה ${g.available?.version ?? ''}`, icon: ICON.update, onClick: () => onAct('update'), disabled: blocked }
-  else if (g.status === 'needsRepair') main = { label: 'התקנה מחדש', icon: ICON.update, onClick: () => onAct('update'), disabled: blocked || !g.available }
-  else if (g.status === 'notFound') main = { label: 'בחירת תיקיית המשחק', icon: ICON.folder, onClick: onPick, disabled: busy }
-  else if (g.status === 'installed' && g.launchOnly) main = { label: 'שחק בעברית', icon: ICON.play, onClick: () => onAct('play'), disabled: busy || !!g.running }
-  else if (g.status === 'playing') main = { label: 'המשחק פועל בעברית', icon: ICON.play, onClick: () => {}, disabled: true }
+  const main = mainAction(g, busy, onAct, onPick)
 
   const more = [
     ...(g.location ? [{ label: 'פתיחת תיקיית המשחק', icon: ICON.folder, onClick: onOpenFolder }] : []),
@@ -107,13 +141,13 @@ export function GamePage({ g, busy, progress, onBack, onAct, onPick, onOpenFolde
     <div className="page game-page">
       <Hero hero={g.hero} cover={g.cover} label={g.name}>
         <button className="back" onClick={onBack}><Icon g={ICON.back} /> חזרה</button>
-        <h1>{title(g)}</h1>
         {g.nameHe && <div className="en">{g.name}</div>}
+        <h1>{title(g)}</h1>
         <div className="hero-meta">
           <StatusPill g={g} />
           {g.engine && g.engine !== 'custom' && <span className="chip">{g.engine === 'unreal' ? 'Unreal Engine' : g.engine === 'unity' ? 'Unity' : g.engine}</span>}
         </div>
-        {g.aboutHe && <p className="about">{g.aboutHe}</p>}
+        {g.aboutHe && <p className="about subtitle">{g.aboutHe}</p>}
         <div className="actions">
           {main && (
             <button className="btn primary big" onClick={main.onClick} disabled={main.disabled}>
@@ -135,12 +169,12 @@ export function GamePage({ g, busy, progress, onBack, onAct, onPick, onOpenFolde
       </Hero>
 
       <div className="page-body">
-        <div className="stats">
+        <dl className="facts">
           <Stat label="גרסת התרגום" value={g.installed?.version ?? g.available?.version ?? ''} sub={g.installed ? `הותקנה ב-${date(g.installed.installedAt)}` : g.available?.publishedAt ? `פורסמה ב-${date(g.available.publishedAt)}` : undefined} />
           <Stat label="גודל ההורדה" value={size(g.available?.size)} sub={g.available ? (g.available.source === 'github' ? 'מ-GitHub' : undefined) : undefined} />
           <Stat label="המשחק נמצא ב-" value={g.location ? SOURCE[g.location.source] ?? g.location.source : 'לא נמצא'} />
           <Stat label="גרסת המשחק" value={g.installed?.gameVersion ?? (g.installed?.forced ? 'לא מוכרת' : '')} sub={g.installed ? `${g.installed.files} קבצים הותקנו` : undefined} />
-        </div>
+        </dl>
 
         {todo.length > 0 && (
           <section className="todo">
@@ -160,7 +194,7 @@ export function GamePage({ g, busy, progress, onBack, onAct, onPick, onOpenFolde
         {g.available?.changelog && (
           <section className="notes">
             <h3>מה חדש בגרסה {g.available.version}</h3>
-            <p>{g.available.changelog}</p>
+            <Changelog text={g.available.changelog} />
           </section>
         )}
 

@@ -84,6 +84,10 @@ pub struct InstallRecord {
     /// Swap packs: what is put in place while the game runs from the launcher.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub swap: Vec<SwapItem>,
+    /// Installed from a paid pack (a download grant from the account server). Play and update stay gated by the
+    /// account even if a later catalog says the game is free.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub paid: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -165,6 +169,15 @@ impl Installer {
     }
     pub fn record(&self, game_id: &str) -> Option<InstallRecord> {
         self.load_state().installs.get(game_id).cloned()
+    }
+    /// Marks an install as coming from a paid pack (see `InstallRecord::paid`).
+    pub fn mark_paid(&self, game_id: &str) -> Result<()> {
+        let mut s = self.load_state();
+        if let Some(r) = s.installs.get_mut(game_id) {
+            r.paid = true;
+            self.save_state(&s)?;
+        }
+        Ok(())
     }
     pub fn set_custom_path(&self, game_id: &str, dir: Option<&str>) -> Result<()> {
         check_game_id(game_id)?;
@@ -417,6 +430,7 @@ impl Installer {
                     .collect(),
                 activation: m.activation.clone(),
                 swap: swap_items,
+                paid: false,
             };
             let mut s = self.load_state();
             s.installs.insert(o.game_id.into(), rec.clone());

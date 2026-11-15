@@ -123,6 +123,13 @@ pub fn wildcard(pattern: &str, text: &str) -> bool {
     pi == p.len()
 }
 
+/// Debug builds only: `http://127.0.0.1:<port>/…` or `http://localhost:<port>/…` (the reference account server on
+/// this PC). Release builds allow https only.
+pub fn dev_local_http(u: &str) -> bool {
+    cfg!(debug_assertions)
+        && url::Url::parse(u).is_ok_and(|p| p.scheme() == "http" && matches!(p.host_str(), Some("127.0.0.1") | Some("localhost")))
+}
+
 pub fn strip_bom(s: &str) -> &str {
     s.strip_prefix('\u{feff}').unwrap_or(s)
 }

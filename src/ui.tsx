@@ -30,6 +30,8 @@ export const ICON = {
   prev: '',
   play: '\uE768',
   game: '',
+  store: '',
+  account: '',
 }
 
 export function Icon({ g, className }: { g: string; className?: string }) {
@@ -49,7 +51,7 @@ export function Art({ src, label, className }: { src: string; label: string; cla
 
 export function StatusPill({ g }: { g: Game }) {
   const s = g.inProgress && (g.status === 'noPack' || g.status === 'notFound') ? 'noPack' : g.status
-  return <span className={`pill ${s}`}>{g.running ? 'המשחק פתוח' : STATUS[s]}</span>
+  return <span className={`status ${s}`}><i aria-hidden="true" />{g.running ? 'המשחק פתוח' : STATUS[s]}</span>
 }
 
 export function GameCard({ g, onOpen }: { g: Game; onOpen: () => void }) {
@@ -58,7 +60,7 @@ export function GameCard({ g, onOpen }: { g: Game; onOpen: () => void }) {
       <Art src={g.cover} label={g.name} className="cover" />
       <div className="card-body">
         <div className="card-name">{title(g)}</div>
-        {g.nameHe && <div className="card-en">{g.name}</div>}
+        {g.nameHe && <div className="card-en en">{g.name}</div>}
         <StatusPill g={g} />
       </div>
     </button>
@@ -69,8 +71,8 @@ export function PcTile({ o, onOpen }: { o: PcGame; onOpen: () => void }) {
   return (
     <button className="tile" onClick={onOpen} title={o.name}>
       <Art src={o.cover} label={o.name} className="cover" />
-      <span className={`store ${o.store}`}>{o.store === 'steam' ? 'Steam' : 'Epic'}</span>
       <div className="tile-name">{o.name}</div>
+      <div className="tile-store">{o.store === 'steam' ? 'Steam' : 'Epic Games'}</div>
     </button>
   )
 }
