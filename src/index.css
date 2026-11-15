@@ -49,7 +49,11 @@ h1, h2, h3, p { margin: 0; }
 .grow { flex: 1; }
 
 /* ---------- frame ---------- */
-.app { height: 100%; display: grid; grid-template-rows: 40px 1fr 28px; }
+.app { height: 100%; display: grid; grid-template-rows: 40px auto 1fr 28px; }
+.app > .titlebar { grid-row: 1; }
+.app > .update-banner { grid-row: 2; }
+.app > .body { grid-row: 3; min-height: 0; }
+.app > .statusbar { grid-row: 4; }
 .body { display: grid; grid-template-columns: var(--side-w) 1fr; min-height: 0; }
 main { overflow-y: auto; overflow-x: hidden; position: relative; scroll-behavior: smooth; }
 
@@ -258,3 +262,15 @@ main { overflow-y: auto; overflow-x: hidden; position: relative; scroll-behavior
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---------- launcher update banner ---------- */
+.update-banner { display: flex; align-items: center; gap: 14px; padding: 10px 18px; background: linear-gradient(90deg, rgba(242, 179, 61, .16), rgba(242, 179, 61, .06)); border-bottom: 1px solid rgba(242, 179, 61, .35); animation: rise .2s var(--ease); }
+.update-banner > svg { width: 20px; height: 20px; color: var(--accent); flex: none; }
+.update-banner .update-text { display: grid; gap: 2px; flex: 1; min-width: 0; }
+.update-banner strong { font-weight: 600; }
+.update-banner .update-text > span { color: var(--muted); font-size: 13px; }
+.update-banner .update-notes { color: var(--faint); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.update-banner .btn { flex: none; }
+.dialog .check { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.dialog .check input { width: 16px; height: 16px; accent-color: var(--accent); }
+.dialog .check-note { color: var(--faint); font-size: 12px; margin-top: -6px; }

@@ -125,18 +125,26 @@ export default function App() {
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), kind === 'error' ? 9000 : 5000)
   }, [])
 
-  const self = useSelfUpdate(!!info && !info.dev, (text) => toast(text, 'error'))
+  const self = useSelfUpdate(!!info && !info.dev)
 
+  // Updating restarts the launcher: never while a translation is going in, or while a game runs in Hebrew from a
+  // swap pack (the launcher has to put the original files back when it exits).
   async function updateLauncher() {
-    if (!self.available) return
     if (busy) { toast('אפשר לעדכן את המשגר אחרי שהפעולה הנוכחית תסתיים.', 'info'); return }
-    const notes = self.available.notes ? `
-
-מה חדש:
-${self.available.notes}` : ''
-    const ok = await ask('גרסה חדשה של המשגר', `גרסה ${self.available.version} זמינה. המשגר יוריד אותה, יתקין אותה ויופעל מחדש. התרגומים שהתקנתם נשארים כמו שהם.${notes}`, 'עדכון עכשיו')
-    if (ok) await self.install()
+    if ((lib?.translations ?? []).some((g) => g.status === 'playing')) { toast('סגרו את המשחק שפועל בעברית, ואז עדכנו את המשגר.', 'info'); return }
+    await self.updateNow()
   }
+
+  async function checkUpdates() {
+    await self.checkNow(true)
+  }
+
+  useEffect(() => {
+    if (self.state === 'upToDate') toast(`המשגר מעודכן (גרסה ${info?.version ?? ''}).`, 'ok')
+    else if (self.state === 'error' && self.error) toast(`העדכון נכשל: ${self.error}. נסו שוב בעוד כמה דקות.`, 'error')
+    // Only when the state changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [self.state])
 
   const load = useCallback(async (reload: boolean) => {
     try {
@@ -358,6 +366,23 @@ ${self.available.notes}` : ''
   return (
     <div className="app">
       <TitleBar query={query} setQuery={setQuery} searchRef={searchRef} onRefresh={refresh} refreshing={refreshing} />
+      {self.version && ['available', 'downloading', 'ready', 'installing'].includes(self.state) && (
+        <div className={`update-banner ${self.state}`} role="status">
+          <Icon g={ICON.update} />
+          <div className="update-text">
+            <strong>גרסה חדשה של המשגר: <span dir="ltr">{self.version}</span></strong>
+            <span>
+              {self.state === 'available' && 'התרגומים שהתקנתם נשארים כמו שהם.'}
+              {self.state === 'downloading' && <>מוריד ברקע…{self.progress != null && <span dir="ltr"> {Math.round(self.progress * 100)}%</span>}</>}
+              {self.state === 'ready' && 'העדכון ירד ונבדק. הפעלה מחדש תשלים אותו.'}
+              {self.state === 'installing' && 'מתקין ומפעיל מחדש…'}
+            </span>
+            {self.notes && self.state !== 'installing' && <small className="update-notes">{self.notes}</small>}
+          </div>
+          {self.state === 'available' && <button className="btn primary" onClick={updateLauncher}>עדכן עכשיו</button>}
+          {self.state === 'ready' && <button className="btn primary" onClick={updateLauncher}>הפעל מחדש ועדכן</button>}
+        </div>
+      )}
       <div className="body">
         <nav className="sidebar">
           {CATS.map((c) => (
@@ -390,12 +415,10 @@ ${self.available.notes}` : ''
         <span className="grow" />
         <span className="hint" title="המשגר בודק ב-GitHub כל 10 דקות. כדי לבדוק עכשיו, לחצו Ctrl+F5.">תרגום חדש לא מופיע? <kbd dir="ltr">Ctrl+F5</kbd></span>
         {info?.dev && <span className="dev">מצב בדיקה</span>}
-        {self.available && (
-          <button className="self-update" onClick={updateLauncher} disabled={self.progress !== undefined}>
+        {info && !info.dev && (
+          <button className="self-update" onClick={checkUpdates} disabled={self.state === 'checking' || self.state === 'downloading' || self.state === 'installing'} title="בודק ב-GitHub אם יש גרסה חדשה של המשגר">
             <Icon g={ICON.update} />
-            {self.progress === undefined
-              ? <span>גרסה חדשה <span dir="ltr">{self.available.version}</span>: עדכון</span>
-              : <span>מעדכן…{self.progress != null && <span dir="ltr"> {Math.round(self.progress * 100)}%</span>}</span>}
+            <span>{self.state === 'checking' ? 'בודק…' : 'בדוק עדכונים'}</span>
           </button>
         )}
         {info && <span dir="ltr">Tirgumim {info.version}</span>}
@@ -423,6 +446,11 @@ ${self.available.notes}` : ''
               <input dir="ltr" value={settings.url} placeholder={settings.placeholder} onChange={(e) => setSettings({ ...settings, url: e.target.value })} spellCheck={false} />
               <small>השאירו ריק כדי להשתמש ברשימה הרגילה מ-GitHub.</small>
             </label>
+            <label className="check">
+              <input type="checkbox" checked={self.auto} onChange={(e) => self.setAuto(e.target.checked)} />
+              <span>עדכון אוטומטי של המשגר</span>
+            </label>
+            <small className="check-note">גרסה חדשה תרד ברקע, ותצטרכו רק ללחוץ "הפעל מחדש ועדכן". בלי הסימון, המשגר רק יודיע שיש גרסה חדשה.</small>
             <div className="dialog-actions">
               <button className="btn primary" onClick={saveSettings}>שמירה</button>
               <button className="btn ghost" onClick={() => setSettings(null)}>ביטול</button>

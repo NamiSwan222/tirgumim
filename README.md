@@ -36,9 +36,10 @@ npm run publish-launcher -- 0.3.0 "מה חדש בגרסה הזו"
 
 This sets the version in every file, runs the tests, commits, tags `v0.3.0` and pushes. Then
 `.github/workflows/release.yml` builds the installer on Windows, signs it for the updater, publishes release
-`v0.3.0` and copies its `latest.json` to the fixed `updater` release. Every launcher checks that file at start and every
-hour, shows "גרסה חדשה" in the status bar, and on a click downloads it, checks the signature, installs and
-restarts. The tag message is what players see under "מה חדש". Not in the test catalog mode.
+`v0.3.0` and copies its `latest.json` to the fixed `updater` release. Every launcher checks that file at start, every hour and when
+the player presses "בדוק עדכונים" (status bar). By default it downloads the new version in the background and shows a
+banner with "הפעל מחדש ועדכן"; with automatic updates off (Settings) the banner offers "עדכן עכשיו". The signature is
+checked before installing. The tag message is what players see under "מה חדש". Not in the test catalog mode.
 
 **Signing key (one time).** Updates are signed with our own key, so nobody else can push an update to players.
 1. `npx tauri signer generate -w "%USERPROFILE%.tauri	irgumim.key"` (a password is optional). Keep the
