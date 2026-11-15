@@ -202,8 +202,10 @@ main { overflow-y: auto; overflow-x: hidden; position: relative; scroll-behavior
 .link .icon { font-size: 11px; }
 
 /* ---------- game page ---------- */
-.hero { position: relative; min-height: 420px; overflow: hidden; }
-.hero-bg { position: absolute; inset: 0; }
+/* The hero must not clip: the "More" menu hangs below it. Its art is clipped by .hero-bg, and the hero sits above the facts. */
+.hero { position: relative; z-index: 3; min-height: 420px; }
+.hero-bg { position: absolute; inset: 0; overflow: hidden; }
+.page-body { position: relative; z-index: 1; }
 .hero-bg img { width: 100%; height: 100%; object-fit: cover; animation: fade .4s ease; }
 .hero-bg img.blurred { filter: blur(30px) brightness(.55) saturate(1.25); transform: scale(1.2); }
 .hero-fade { position: absolute; inset: 0; background:
@@ -252,7 +254,7 @@ main { overflow-y: auto; overflow-x: hidden; position: relative; scroll-behavior
 
 .page-body { padding: 8px 40px 48px; display: grid; gap: 34px; max-width: 1080px; }
 /* The facts read as one line of a record, separated by rules, not four boxes. */
-.facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
+.facts { display: grid; grid-template-columns: repeat(var(--cols, 4), minmax(0, 1fr)); margin: 0; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
 .fact { padding: 16px 20px; min-width: 0; }
 .fact + .fact { border-inline-start: 1px solid var(--rule); }
 .fact:first-child { padding-inline-start: 0; }
@@ -376,3 +378,26 @@ main { overflow-y: auto; overflow-x: hidden; position: relative; scroll-behavior
 .shop-buy { margin-top: auto; padding-top: 12px; }
 .shop-soon { color: var(--smoke); font-weight: 600; }
 .dialog .code { font: 700 44px/1 var(--font-head); letter-spacing: 6px; color: var(--sub); text-align: center; padding: 10px 0; }
+
+/* ---------- fixes: long names, small windows, notes ---------- */
+.hero h1.long { font-size: clamp(40px, 4.6vw, 62px); line-height: .95; }
+.stage-title.long { font-size: clamp(40px, min(5vw, 8vh), 64px); line-height: .95; }
+.stage-title { font-size: clamp(44px, min(10vw, 15vh), 118px); }
+.rail-item .art-label { font-size: 15px; padding: 8px; overflow: hidden; }
+.todo li span:nth-child(2) { flex: 0 1 auto; }
+.todo li .link { margin-inline-start: 6px; white-space: nowrap; }
+@media (max-height: 700px) {
+  .stage-about { -webkit-line-clamp: 1; font-size: 15px; }
+  .stage-copy { padding-bottom: 14px; }
+  .rail-wrap { padding-bottom: 14px; }
+  .rail-wrap header { margin-bottom: 6px; }
+  .rail-item { width: 84px; }
+  .rail-name { -webkit-line-clamp: 1; }
+}
+@media (max-width: 1000px) {
+  .hero-content { gap: 24px; padding-inline: 28px; }
+  .hero-cover { width: 140px; }
+  .list-page, .page-body { padding-inline: 24px; }
+  .stage-copy, .rail-wrap { padding-inline: 28px; }
+  .shop-item .cover { width: 120px; }
+}

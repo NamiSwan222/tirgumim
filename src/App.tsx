@@ -348,7 +348,7 @@ export default function App() {
     if (cat === 'pc') {
       return (
         <div className="page list-page">
-          <h1 className="page-title">{label}<span className="count">{others.length}</span></h1>
+          <h1 className="page-title">{label}{others.length > 0 && <span className="count">{others.length}</span>}</h1>
           <p className="lead">המשחקים שמצאנו ב-Steam וב-Epic במחשב הזה. עדיין אין לנו תרגום אליהם.</p>
           {others.length ? <div className="grid tiles">{others.map((o) => <PcTile key={o.store + o.id} o={o} onOpen={() => openPc(o)} />)}</div> : <Empty text="לא נמצאו משחקים של Steam או Epic." />}
         </div>
@@ -358,7 +358,7 @@ export default function App() {
     const empty = { ours: 'אין עדיין תרגומים ברשימה.', installed: 'עוד לא התקנתם תרגום.', updates: 'כל התרגומים שלכם מעודכנים.', soon: 'אין כרגע תרגומים בהכנה.' }[cat as 'ours']
     return (
       <div className="page list-page">
-        <h1 className="page-title">{label}<span className="count">{list.length}</span></h1>
+        <h1 className="page-title">{label}{list.length > 0 && <span className="count">{list.length}</span>}</h1>
         {list.length ? <div className="grid">{list.map((g) => <GameCard key={g.id} g={g} onOpen={() => openGame(g)} />)}</div> : <Empty text={empty} />}
       </div>
     )

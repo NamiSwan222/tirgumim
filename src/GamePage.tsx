@@ -115,7 +115,8 @@ export function GamePage({ g, busy, progress, onBack, onAct, onPick, onOpenFolde
   onOpenUrl: (url: string) => void
 }) {
   const mine = progress && progress.gameId === g.id ? progress : null
-  const main = mainAction(g, busy, onAct, onPick)
+  const soon = g.status === 'noPack' || (g.inProgress && !g.available)
+  const main = soon ? null : mainAction(g, busy, onAct, onPick)
 
   const more = [
     ...(g.location ? [{ label: 'פתיחת תיקיית המשחק', icon: ICON.folder, onClick: onOpenFolder }] : []),
@@ -125,24 +126,37 @@ export function GamePage({ g, busy, progress, onBack, onAct, onPick, onOpenFolde
 
   // What still stands between the player and the translation.
   const todo: { text: string; url?: string | null; kind: 'warn' | 'info' }[] = []
-  if (g.status === 'notFound') todo.push({ kind: 'warn', text: 'לא מצאנו את המשחק ב-Steam או ב-Epic. אם הוא מותקן במקום אחר, בחרו את התיקייה שלו.' })
+  if (g.status === 'notFound' && !soon) todo.push({ kind: 'warn', text: 'לא מצאנו את המשחק ב-Steam או ב-Epic. אם הוא מותקן במקום אחר, בחרו את התיקייה שלו.' })
   if (g.running && g.status !== 'playing') todo.push({ kind: 'warn', text: g.launchOnly && g.installed
     ? `המשחק פתוח (${ltr(g.running)}) בלי התרגום. כדי לשחק בעברית, סגרו אותו ולחצו "שחק בעברית".`
     : `המשחק פתוח (${ltr(g.running)}). סגרו אותו כדי להתקין או להסיר את התרגום.` })
   if (g.status === 'playing' && g.launchOnly === 'swap') todo.push({ kind: 'info', text: 'קבצי התרגום נמצאים עכשיו במשחק. כשתסגרו את המשחק, המשגר יחזיר את הקבצים המקוריים. השאירו את המשגר פתוח עד אז.' })
   for (const n of g.needs) todo.push({ kind: 'warn', text: n.message, url: n.url })
   if (g.status === 'needsRepair') todo.push({ kind: 'warn', text: 'חלק מקבצי התרגום הוחלפו, כנראה אחרי עדכון של המשחק. התקינו מחדש כדי לתקן.' })
-  if (g.status === 'needsLauncher') todo.push({ kind: 'warn', text: `התרגום למשחק הזה דורש גרסה חדשה יותר של המשגר (${ltr(g.minLauncherVersion ?? '')}). כשיופיע "גרסה חדשה" בשורת המצב, לחצו עליו, ואז תוכלו להתקין.` })
+  if (g.status === 'needsLauncher') todo.push({ kind: 'warn', text: `התרגום למשחק הזה דורש גרסה חדשה יותר של המשגר (${ltr(g.minLauncherVersion ?? '')}). עדכנו את המשגר (הפס הצהוב למעלה, או "בדוק עדכונים" בשורת המצב), ואז תוכלו להתקין.` })
   if (g.status === 'unavailable') todo.push({ kind: 'info', text: 'לא הצלחנו לקבל את פרטי התרגום מ-GitHub. נסו לרענן בעוד כמה דקות.' })
-  if (g.status === 'noPack' || (g.inProgress && !g.available)) todo.push({ kind: 'info', text: 'אנחנו עדיין עובדים על התרגום למשחק הזה. כשהוא יהיה מוכן הוא יופיע כאן.' })
+  if (soon) todo.push({ kind: 'info', text: 'אנחנו עדיין עובדים על התרגום למשחק הזה. כשהוא יהיה מוכן הוא יופיע כאן.' })
   if (g.installed?.forced) todo.push({ kind: 'info', text: 'התרגום הותקן על גרסת משחק שלא נבדקה. אם משהו לא נראה טוב, אפשר להסיר אותו.' })
+
+  // Only facts that have something to say. A pack without game versions has no version to show, and a pack that
+  // only works from the launcher says so instead of counting files.
+  const inst = g.installed
+  const facts: { label: string; value: string; sub?: string }[] = []
+  const tver = inst?.version ?? g.available?.version
+  if (tver) facts.push({ label: 'גרסת התרגום', value: ltr(tver), sub: inst ? `הותקנה ב-${date(inst.installedAt)}` : g.available?.publishedAt ? `פורסמה ב-${date(g.available.publishedAt)}` : undefined })
+  if (g.available?.size) facts.push({ label: 'גודל ההורדה', value: size(g.available.size), sub: g.available.source === 'github' ? 'מ-GitHub' : undefined })
+  if (g.location) facts.push({ label: 'המשחק נמצא ב-', value: SOURCE[g.location.source] ?? g.location.source })
+  if (inst?.gameVersion) facts.push({ label: 'גרסת המשחק', value: inst.gameVersion })
+  else if (inst?.forced) facts.push({ label: 'גרסת המשחק', value: 'לא מוכרת', sub: 'הותקן בכל זאת' })
+  else if (inst && g.launchOnly) facts.push({ label: 'איך זה פועל', value: 'רק מהמשגר', sub: 'מ-Steam המשחק נפתח כרגיל' })
+  else if (inst) facts.push({ label: 'קבצים שהותקנו', value: String(inst.files) })
 
   return (
     <div className="page game-page">
       <Hero hero={g.hero} cover={g.cover} label={g.name}>
         <button className="back" onClick={onBack}><Icon g={ICON.back} /> חזרה</button>
         {g.nameHe && <div className="en">{g.name}</div>}
-        <h1>{title(g)}</h1>
+        <h1 className={title(g).length > 22 ? 'long' : ''}>{title(g)}</h1>
         <div className="hero-meta">
           <StatusPill g={g} />
           {g.engine && g.engine !== 'custom' && <span className="chip">{g.engine === 'unreal' ? 'Unreal Engine' : g.engine === 'unity' ? 'Unity' : g.engine}</span>}
@@ -154,7 +168,6 @@ export function GamePage({ g, busy, progress, onBack, onAct, onPick, onOpenFolde
               <Icon g={main.icon} /> {main.label}
             </button>
           )}
-          {g.status === 'installed' && !g.launchOnly && <span className="done-note"><Icon g={ICON.ok} /> התרגום מותקן. משחק מהנה!</span>}
           {g.status === 'installed' && g.launchOnly && <span className="done-note"><Icon g={ICON.ok} /> התרגום מוכן. הוא פועל רק כשמפעילים את המשחק מכאן. מ-Steam המשחק נפתח כרגיל.</span>}
           <More items={more} disabled={busy} />
         </div>
@@ -169,12 +182,11 @@ export function GamePage({ g, busy, progress, onBack, onAct, onPick, onOpenFolde
       </Hero>
 
       <div className="page-body">
-        <dl className="facts">
-          <Stat label="גרסת התרגום" value={g.installed?.version ?? g.available?.version ?? ''} sub={g.installed ? `הותקנה ב-${date(g.installed.installedAt)}` : g.available?.publishedAt ? `פורסמה ב-${date(g.available.publishedAt)}` : undefined} />
-          <Stat label="גודל ההורדה" value={size(g.available?.size)} sub={g.available ? (g.available.source === 'github' ? 'מ-GitHub' : undefined) : undefined} />
-          <Stat label="המשחק נמצא ב-" value={g.location ? SOURCE[g.location.source] ?? g.location.source : 'לא נמצא'} />
-          <Stat label="גרסת המשחק" value={g.installed?.gameVersion ?? (g.installed?.forced ? 'לא מוכרת' : '')} sub={g.installed ? `${g.installed.files} קבצים הותקנו` : undefined} />
-        </dl>
+        {facts.length > 0 && (
+          <dl className="facts" style={{ '--cols': facts.length } as React.CSSProperties}>
+            {facts.map((f) => <Stat key={f.label} {...f} />)}
+          </dl>
+        )}
 
         {todo.length > 0 && (
           <section className="todo">

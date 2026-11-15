@@ -38,7 +38,7 @@ export function StorePage({ store, account, onBuy, onSignIn, onReload }: {
   if (!store) return <div className="page loading"><div className="spinner" /><p>טוען את החנות…</p></div>
   return (
     <div className="page list-page">
-      <h1 className="page-title">חנות<span className="count">{store.items.length}</span></h1>
+      <h1 className="page-title">חנות{store.items.length > 0 && <span className="count">{store.items.length}</span>}</h1>
       <p className="lead">תרגומים בתשלום. אחרי הרכישה התרגום מופיע בספרייה שלכם, בכל מחשב שמחובר לחשבון.</p>
 
       {store.configured && !store.signedIn && (

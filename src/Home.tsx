@@ -67,7 +67,7 @@ export function Home({ games, othersCount, selected, onSelect, busy, progress, o
 
       <section className="stage-copy" key={g.id}>
         {g.nameHe && <div className="en stage-en">{g.name}</div>}
-        <h1 className="stage-title">{title(g)}</h1>
+        <h1 className={`stage-title ${title(g).length > 22 ? 'long' : ''}`}>{title(g)}</h1>
         <div className="stage-meta">
           <StatusPill g={g} />
           {facts.map((f) => <span key={f} className="fact-chip">{f}</span>)}
@@ -79,7 +79,6 @@ export function Home({ games, othersCount, selected, onSelect, busy, progress, o
               <Icon g={main.icon} /> {main.label}
             </button>
           )}
-          {g.status === 'installed' && !g.launchOnly && <span className="done-note"><Icon g={ICON.ok} /> התרגום מותקן. משחק מהנה!</span>}
           <button className="btn glass big" onClick={() => onOpen(g)}>לעמוד המשחק</button>
         </div>
         {mine && (
