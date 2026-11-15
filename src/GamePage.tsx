@@ -98,6 +98,7 @@ export function GamePage({ g, busy, progress, onBack, onAct, onPick, onOpenFolde
   if (g.status === 'playing' && g.launchOnly === 'swap') todo.push({ kind: 'info', text: 'קבצי התרגום נמצאים עכשיו במשחק. כשתסגרו את המשחק, המשגר יחזיר את הקבצים המקוריים. השאירו את המשגר פתוח עד אז.' })
   for (const n of g.needs) todo.push({ kind: 'warn', text: n.message, url: n.url })
   if (g.status === 'needsRepair') todo.push({ kind: 'warn', text: 'חלק מקבצי התרגום הוחלפו, כנראה אחרי עדכון של המשחק. התקינו מחדש כדי לתקן.' })
+  if (g.status === 'needsLauncher') todo.push({ kind: 'warn', text: `התרגום למשחק הזה דורש גרסה חדשה יותר של המשגר (${ltr(g.minLauncherVersion ?? '')}). כשיופיע "גרסה חדשה" בשורת המצב, לחצו עליו, ואז תוכלו להתקין.` })
   if (g.status === 'unavailable') todo.push({ kind: 'info', text: 'לא הצלחנו לקבל את פרטי התרגום מ-GitHub. נסו לרענן בעוד כמה דקות.' })
   if (g.status === 'noPack' || (g.inProgress && !g.available)) todo.push({ kind: 'info', text: 'אנחנו עדיין עובדים על התרגום למשחק הזה. כשהוא יהיה מוכן הוא יופיע כאן.' })
   if (g.installed?.forced) todo.push({ kind: 'info', text: 'התרגום הותקן על גרסת משחק שלא נבדקה. אם משהו לא נראה טוב, אפשר להסיר אותו.' })

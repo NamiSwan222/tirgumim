@@ -33,6 +33,9 @@ jobs:
       - name: Catalog check
         run: cargo run --quiet --manifest-path src-tauri/Cargo.toml -- --check-catalog catalog/catalog.json --online
 
+      - name: No game-specific code in the app
+        run: node scripts/no-game-code.mjs
+
       - name: Tests
         run: npm test
 

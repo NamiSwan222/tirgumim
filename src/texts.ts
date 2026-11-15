@@ -10,6 +10,7 @@ export const STATUS: Record<Status, string> = {
   updateAvailable: 'יש עדכון',
   needsRepair: 'דרוש תיקון',
   playing: 'פועל בעברית עכשיו',
+  needsLauncher: 'צריך לעדכן את המשגר',
 }
 
 export const SOURCE: Record<string, string> = {

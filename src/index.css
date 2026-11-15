@@ -136,7 +136,7 @@ main { overflow-y: auto; overflow-x: hidden; position: relative; scroll-behavior
 .pill.installed { background: rgba(60, 203, 127, .14); color: var(--ok); }
 .pill.playing { background: rgba(60, 203, 127, .22); color: var(--ok); }
 .pill.updateAvailable, .pill.needsRepair { background: rgba(242, 181, 68, .2); color: var(--warn); }
-.pill.notFound, .pill.unavailable { background: var(--panel2); color: var(--faint); }
+.pill.notFound, .pill.unavailable, .pill.needsLauncher { background: var(--panel2); color: var(--faint); }
 .pill.noPack { background: rgba(143, 176, 255, .13); color: var(--info); }
 .chip { font-size: 12px; padding: 2px 10px; border-radius: 20px; border: 1px solid var(--line2); color: var(--muted); }
 

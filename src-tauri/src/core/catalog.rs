@@ -94,6 +94,10 @@ pub struct CatalogGame {
     /// Dev catalog only: the sample game's folder.
     #[serde(default)]
     pub dev_path: Option<String>,
+    /// The game needs at least this launcher (its packs use something newer): older launchers list it with
+    /// "update the launcher" instead of offering an install that can't work.
+    #[serde(default)]
+    pub min_launcher_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -183,7 +187,39 @@ pub fn parse_catalog(text: &str, base_url: &str) -> Result<Catalog, String> {
 }
 
 pub fn load_catalog(url: &str) -> Result<Catalog, String> {
-    parse_catalog(&fetch_text(url)?, url)
+    parse_catalog_tolerant(&fetch_text(url)?, url)
+}
+
+/// What the launcher uses: a game entry it can't read (written for a newer launcher, or a mistake) is left out,
+/// and the rest of the list still works. `--check-catalog` uses the strict `parse_catalog`.
+pub fn parse_catalog_tolerant(text: &str, base_url: &str) -> Result<Catalog, String> {
+    let mut v: Value = serde_json::from_str(util::strip_bom(text)).map_err(|e| format!("Catalog is not valid: {e}"))?;
+    if let Some(games) = v.get_mut("games").and_then(Value::as_array_mut) {
+        games.retain(|g| {
+            let ok = serde_json::from_value::<CatalogGame>(g.clone()).is_ok();
+            if !ok {
+                eprintln!("catalog: skipping an entry this launcher can't read: {}", g.get("id").and_then(Value::as_str).unwrap_or("?"));
+            }
+            ok
+        });
+    }
+    match parse_catalog(&v.to_string(), base_url) {
+        Ok(c) => Ok(c),
+        // A bad id or checksum in one entry: drop the entries that fail one by one.
+        Err(_) => {
+            let games = v.get("games").and_then(Value::as_array).cloned().unwrap_or_default();
+            let keep: Vec<Value> = games
+                .into_iter()
+                .filter(|g| {
+                    let mut one = v.clone();
+                    one["games"] = Value::Array(vec![g.clone()]);
+                    parse_catalog(&one.to_string(), base_url).is_ok()
+                })
+                .collect();
+            v["games"] = Value::Array(keep);
+            parse_catalog(&v.to_string(), base_url)
+        }
+    }
 }
 
 // ---------- GitHub releases ----------

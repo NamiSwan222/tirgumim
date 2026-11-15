@@ -631,6 +631,27 @@ fn play_loop_with_a_real_process() {
     assert_eq!(game_tree(&p.s.game), original_game);
 }
 
+/// Packs and catalog entries written for a future launcher must never look broken to this one.
+#[test]
+fn future_packs_and_catalog_entries_are_handled_gracefully() {
+    let s = setup();
+    // A mode this launcher doesn't know, from a pack that says it needs launcher 9.0.0.
+    let m = serde_json::json!({ "schema": 1, "packId": "x", "gameId": "sample-game", "version": "1", "minLauncherVersion": "9.0.0",
+        "files": [{ "path": "a.txt", "sha256": "a".repeat(64) }], "activation": { "mode": "teleport", "exe": "x.exe" } });
+    let zip = raw_zip(&s.root, &m, &[("files/a.txt", b"x")]);
+    assert_eq!(s.inst.install(&opts(&s, &zip, None, false), &mut |_| {}).unwrap_err().code, "LAUNCHER_TOO_OLD");
+
+    // One entry this launcher can't read doesn't take the whole list down.
+    let cat = serde_json::json!({ "schema": 1, "games": [
+        { "id": "good", "name": "Good", "detect": { "steamAppId": "1" } },
+        { "id": "future", "name": "Future", "detect": "a new shape" },
+        { "id": "bad id!", "name": "Bad" }
+    ] });
+    let c = super::catalog::parse_catalog_tolerant(&cat.to_string(), "https://example.com/catalog.json").unwrap();
+    assert_eq!(c.games.iter().map(|g| g.id.as_str()).collect::<Vec<_>>(), ["good"]);
+    assert!(super::catalog::parse_catalog(&cat.to_string(), "https://example.com/catalog.json").is_err(), "the CI check stays strict");
+}
+
 #[test]
 fn launch_manifest_rules() {
     let h = |c: char| c.to_string().repeat(64);

@@ -195,6 +195,8 @@ impl Shared {
             } else {
                 "installed"
             }
+        } else if g.min_launcher_version.as_deref().is_some_and(|m| crate::core::util::compare_versions(&self.installer.launcher_version, m).is_lt()) {
+            "needsLauncher"
         } else if loc.is_none() {
             "notFound"
         } else if available.is_some() {
@@ -221,6 +223,7 @@ impl Shared {
             "running": self.running(g, procs),
             "launchOnly": rec.as_ref().and_then(|r| r.activation.as_ref()).map(|a| match a.mode { ActivationMode::Args => "args", ActivationMode::Swap => "swap" }),
             "needs": needs,
+            "minLauncherVersion": g.min_launcher_version,
             "installed": rec.as_ref().map(|r| json!({
                 "version": r.version, "installedAt": r.installed_at, "gameVersion": r.game_version,
                 "forced": r.forced_unknown_version, "changed": verify.as_ref().map(|v| v.changed.clone()).unwrap_or_default(),
@@ -283,6 +286,9 @@ impl Shared {
             Some(Err(e)) => return Err(err("PACK_UNAVAILABLE", e)),
             None => return Err(err("NO_PACK", "No translation pack yet for this game")),
         };
+        if let Some(m) = g.min_launcher_version.as_deref().filter(|m| crate::core::util::compare_versions(&self.installer.launcher_version, m).is_lt()) {
+            return Err(err("LAUNCHER_TOO_OLD", format!("This game needs launcher {m} or newer")));
+        }
         let (dir, _) = self.locate(&g).ok_or_else(|| err("NO_GAME_DIR", "Game folder not found"))?;
         self.check_closed(&g)?;
         let unmet = manifest::unmet_requires(&g.requires, &dir);

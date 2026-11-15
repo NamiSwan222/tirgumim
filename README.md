@@ -5,7 +5,8 @@ replaces and a full restore on uninstall. Hebrew, right-to-left interface.
 
 Built with **Tauri 2**: the work is done in Rust (`src-tauri/`), the window is React + TypeScript (`src/`).
 
-See [DESIGN.md](DESIGN.md) for the catalog and pack formats, and [PLAN.md](PLAN.md) for what's next.
+See [DESIGN.md](DESIGN.md) for the catalog and pack formats, [ADDING-A-GAME.md](ADDING-A-GAME.md) for adding a game
+(no launcher update needed), and [PLAN.md](PLAN.md) for what's next.
 
 ## Needs
 

@@ -2,7 +2,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 
-export type Status = 'notFound' | 'noPack' | 'unavailable' | 'ready' | 'installed' | 'updateAvailable' | 'needsRepair' | 'playing'
+export type Status = 'notFound' | 'noPack' | 'unavailable' | 'ready' | 'installed' | 'updateAvailable' | 'needsRepair' | 'playing' | 'needsLauncher'
 
 export interface Pack {
   version: string
@@ -31,6 +31,7 @@ export interface Game {
   running: string | null
   /** Launch-only translation: Hebrew only when started from the launcher. */
   launchOnly: 'args' | 'swap' | null
+  minLauncherVersion: string | null
   needs: { message: string; url: string | null }[]
   installed: {
     version: string

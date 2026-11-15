@@ -24,6 +24,24 @@ self-update and the signed catalog are still to do.
 | 8 | **Signed catalog** | The same key signs `catalog.json` (`catalog.json.sig`). A catalog with a bad signature is ignored and the last good one is used. Protects players if the GitHub account is taken over. |
 | 9 | **Catalog check** (done) | `.github/workflows/check.yml` checks `catalog.json` on every push with the launcher's parser and rules, and that each GitHub-release pack has a release. |
 
+## Stage 4: paid translations, per game (plan, not built)
+
+Only for games whose risk check allows paid (Undertale and Yu-Gi-Oh are free only). Free games stay as they are.
+Goal: one launcher update (0.5.0) adds the store; after that a paid game is a catalog entry + a product + an
+upload, like a free one.
+
+| Piece | How |
+|---|---|
+| **Catalog** | `"access": { "type": "paid", "productId": "…", "priceLabel": "₪19" }` and `"minLauncherVersion": "0.5.0"` on the game, so 0.4.0 shows "update the launcher" (already built), never a broken install. |
+| **Payment** | A merchant of record (Lemon Squeezy or Paddle: they handle VAT, invoices and refunds) sells one product per game and issues a **license key** per purchase. No card data ever touches us. Check that the provider pays out to an Israeli seller before choosing. |
+| **Buying in the launcher** | "קנייה" opens the provider's checkout in the browser. After paying, a `tirgumim://activate?key=…` link (or pasting the key) brings the key back. Keys are kept in Windows Credential Manager. |
+| **Paid packs** | Not on public GitHub. Stored privately (Cloudflare R2) behind a small Worker: `POST /download { gameId, key, deviceId }` checks the key with the provider (activation limit, e.g. 3 PCs) and returns a short-lived download URL + sha256. Catalog pack form: `{ "gated": "https://api.tirgumim…/download" }`. |
+| **Playing** | Launch-only packs already need the launcher to play in Hebrew. "שחק בעברית" re-checks the key now and then, with 14 days offline grace, so a refund or shared key stops working without bothering honest players. |
+| **Cost** | Cloudflare free tier covers the Worker and storage at our size; the provider takes a fee per sale. |
+
+Decisions for the user before building: provider, prices, activation limit, refund policy, whether players need
+an account (email) or a license key is enough (simplest: key only).
+
 ## Stage 3: nice to have (later)
 
 - A first-run screen, step by step.

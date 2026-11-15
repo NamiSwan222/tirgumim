@@ -195,6 +195,16 @@ impl Installer {
             entry.read_to_string(&mut s).map_err(|e| PackError::new("BAD_MANIFEST", e.to_string()))?;
             s
         };
+        // A pack for a newer launcher may use fields or modes this one doesn't know: say "update the launcher",
+        // not "broken pack", so a future game never looks like an error.
+        if let Some(min) = serde_json::from_str::<serde_json::Value>(util::strip_bom(&text))
+            .ok()
+            .and_then(|v| v.get("minLauncherVersion").and_then(|m| m.as_str()).map(str::to_string))
+        {
+            if compare_versions(&self.launcher_version, &min).is_lt() {
+                return Err(PackError::new("LAUNCHER_TOO_OLD", format!("Pack needs launcher {min} or newer")));
+            }
+        }
         let manifest = manifest::parse_manifest(&text).map_err(|e| PackError::new("BAD_MANIFEST", e))?;
         Ok(OpenPack { manifest, archive })
     }
