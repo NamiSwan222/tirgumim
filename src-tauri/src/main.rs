@@ -22,6 +22,12 @@ fn main() {
             Ok(m) => {
                 let n = m.manifest["files"].as_array().map(Vec::len).unwrap_or(0);
                 println!("Built {} ({n} files)\nCatalog \"pack\" entry:\n{}", m.out.display(), serde_json::to_string_pretty(&m.entry).unwrap());
+                if let Some(min) = m.manifest["minLauncherVersion"].as_str() {
+                    println!(
+                        "\nPut this line in the GitHub release notes (older launchers then keep the last release they can install):\n{}{min}",
+                        tirgumim_lib::core::catalog::MIN_LAUNCHER_MARK
+                    );
+                }
             }
             Err(e) => {
                 eprintln!("Error: {e}");

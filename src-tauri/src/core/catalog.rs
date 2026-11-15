@@ -206,15 +206,36 @@ pub fn version_from_tag(tag: &str) -> Option<String> {
     (!v.is_empty()).then(|| v.to_string())
 }
 
-/// Picks the newest release that matches `src` from GitHub's release list.
+/// A release can say which launcher it needs with a line `tirgumim-min-launcher: 0.4.0` in its notes. Launchers
+/// older than that skip it and take the newest release they can install (from launcher 0.4.0 on; 0.3.0 takes the
+/// newest and says "update the launcher").
+pub const MIN_LAUNCHER_MARK: &str = "tirgumim-min-launcher:";
+
+pub fn release_min_launcher(body: &str) -> Option<String> {
+    body.lines().find_map(|l| {
+        let l = l.trim().trim_start_matches(['-', '*', '`']).trim();
+        l.to_lowercase().strip_prefix(MIN_LAUNCHER_MARK).map(|v| v.trim().trim_end_matches('`').trim().to_string()).filter(|v| !v.is_empty())
+    })
+}
+
+/// Picks the newest release that matches `src` from GitHub's release list, among those this launcher can install.
 pub fn pick_release(releases: &[Value], src: &PackSource) -> Result<ResolvedPack, String> {
+    pick_release_for(releases, src, env!("CARGO_PKG_VERSION"))
+}
+
+pub fn pick_release_for(releases: &[Value], src: &PackSource, launcher_version: &str) -> Result<ResolvedPack, String> {
     let tag_pat = src.tag.as_deref().unwrap_or("*");
     let asset_pat = src.asset.as_deref().unwrap_or("*.zip");
     let mut best: Option<(String, &Value, &Value)> = None;
+    let mut too_new: Option<String> = None;
     for r in releases {
         let s = |k: &str| r.get(k).and_then(Value::as_str).unwrap_or("");
         let b = |k: &str| r.get(k).and_then(Value::as_bool).unwrap_or(false);
         if b("draft") || (b("prerelease") && !src.prerelease) || !wildcard(tag_pat, s("tag_name")) {
+            continue;
+        }
+        if let Some(min) = release_min_launcher(s("body")).filter(|m| compare_versions(launcher_version, m).is_lt()) {
+            too_new.get_or_insert(min);
             continue;
         }
         let Some(version) = version_from_tag(s("tag_name")) else { continue };
@@ -227,7 +248,10 @@ pub fn pick_release(releases: &[Value], src: &PackSource) -> Result<ResolvedPack
             best = Some((version, r, asset));
         }
     }
-    let (version, rel, asset) = best.ok_or(NO_RELEASE)?;
+    let (version, rel, asset) = match best {
+        Some(b) => b,
+        None => return Err(too_new.map(|m| format!("Needs launcher {m} or newer")).unwrap_or_else(|| NO_RELEASE.into())),
+    };
     let url = asset.get("browser_download_url").and_then(Value::as_str).unwrap_or("").to_string();
     if !url.starts_with("https://") {
         return Err("Release file has no https download".into());
@@ -411,6 +435,17 @@ mod tests {
         // no checksum from GitHub: refused
         let nodigest = vec![rel("pbz-1.0.0", "pbz-he-1.0.0.zip", None, false)];
         assert!(pick_release(&nodigest, &src).is_err());
+
+        // A release that needs a newer launcher is skipped: the newest one this launcher can install is used.
+        let mut needs = rel("pbz-0.12.0", "pbz-he-0.12.0.zip", Some(&h), false);
+        needs["body"] = json!("מה חדש\n\n`tirgumim-min-launcher: 0.4.0`");
+        let mixed = vec![rel("pbz-0.11.0", "pbz-he-0.11.0.zip", Some(&h), false), needs];
+        assert_eq!(pick_release_for(&mixed, &src, "0.3.0").unwrap().version, "0.11.0");
+        assert_eq!(pick_release_for(&mixed, &src, "0.4.0").unwrap().version, "0.12.0");
+        let only_new = vec![mixed[1].clone()];
+        assert_eq!(pick_release_for(&only_new, &src, "0.3.0").unwrap_err(), "Needs launcher 0.4.0 or newer");
+        assert_eq!(release_min_launcher("x\ntirgumim-min-launcher: 0.4.0\ny").as_deref(), Some("0.4.0"));
+        assert_eq!(release_min_launcher("nothing here"), None);
     }
 
     #[test]

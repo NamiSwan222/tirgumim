@@ -62,6 +62,11 @@ flag so accounts can be added later without changing the pack format).
 
 The zip's SHA-256 is checked after download, before anything is extracted.
 
+**Releases that need a newer launcher.** A release whose notes contain the line `tirgumim-min-launcher: 0.4.0` is
+skipped by older launchers (from 0.4.0 on), which keep offering the newest release they can install. make-pack
+prints the line. Launcher 0.3.0 doesn't read it: it offers the newest release and, after download, says the
+launcher must be updated (0.3.0 updates itself from the status bar).
+
 ## 3. Pack format (`.zip`)
 
 ```
