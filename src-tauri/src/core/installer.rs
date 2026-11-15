@@ -387,10 +387,13 @@ impl Installer {
             progress("backup");
             let mut plan = Vec::new();
             let (entries, swap_items) = plan_entries(o.game_dir, m, tmp)?;
+            // Args packs only add files; one already there is byte-identical to ours (plan_entries checked), and
+            // is adopted: no backup, recorded as ours, removed on uninstall.
+            let args = m.activation.as_ref().is_some_and(|a| a.mode == ActivationMode::Args);
             for (path, src, sha256, patched) in &entries {
                 let (path, sha256, patched) = (path, sha256, *patched);
                 let abs = resolve_inside(o.game_dir, path).map_err(|e| PackError::new("BAD_MANIFEST", e))?;
-                let backup = if abs.exists() {
+                let backup = if abs.exists() && !args {
                     if abs.is_dir() {
                         return Err(PackError::new("IS_DIR", format!("{path} is a folder in the game")));
                     }
@@ -406,13 +409,17 @@ impl Installer {
             progress("copy");
             let mut files = Vec::new();
             for (path, src, sha256, patched, abs, backup) in plan {
+                files.push(RecordFile { path: path.clone(), sha256: sha256.clone(), backed_up: backup.is_some(), patched });
+                if args && abs.is_file() {
+                    // Adopted (identical): nothing to write, and a failed install leaves it where it was.
+                    continue;
+                }
                 mkdir_tracked(o.game_dir, abs.parent().unwrap(), &mut created)?;
                 // Move when the temp folder is on the game's drive (a 1 GB derived file isn't copied twice).
                 let from = resolve_inside(tmp, src).unwrap();
                 if fs::rename(&from, &abs).is_err() {
                     fs::copy(&from, &abs)?;
                 }
-                files.push(RecordFile { path: path.clone(), sha256: sha256.clone(), backed_up: backup.is_some(), patched });
                 done.push((abs, backup));
             }
             let rec = InstallRecord {
@@ -550,7 +557,16 @@ fn plan_entries(game: &Path, m: &Manifest, tmp: &Path) -> Result<(Vec<(String, S
         Some(ActivationMode::Args) => {
             out.extend(m.files.iter().map(|f| (f.path.clone(), f.path.clone(), f.sha256.clone(), false)));
             out.extend(m.patches.iter().map(|p| (p.target().to_string(), p.target().to_string(), p.to_sha256.clone(), true)));
-            let taken: Vec<String> = out.iter().filter(|(p, ..)| resolve_inside(game, p).map(|a| a.exists()).unwrap_or(false)).map(|(p, ..)| p.clone()).collect();
+            // A file already there is fine if it is exactly ours (left by an earlier install of this translation,
+            // e.g. by hand): it is adopted. Anything else would be replaced, which an args pack never does.
+            let taken: Vec<String> = out
+                .iter()
+                .filter(|(p, _, sha, _)| {
+                    let Ok(abs) = resolve_inside(game, p) else { return true };
+                    abs.exists() && (!abs.is_file() || util::sha256_file_cached(&abs).ok().as_deref() != Some(sha.as_str()))
+                })
+                .map(|(p, ..)| p.clone())
+                .collect();
             if !taken.is_empty() {
                 let mut e = PackError::new("WOULD_REPLACE", format!("A launch-only pack may only add files, but these exist: {}", taken.join(", ")));
                 e.details = taken;

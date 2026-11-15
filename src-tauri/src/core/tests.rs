@@ -593,6 +593,40 @@ fn env_pack_with_derived_copies_never_touches_originals() {
     assert_eq!(tree(&p.s.game), before, "uninstall removes the DLL and the copies, nothing else");
 }
 
+/// Files a translation left in the game folder (a manual install) are adopted when they are exactly the pack's,
+/// and named in the error when they are not.
+#[test]
+fn args_pack_adopts_identical_leftovers_and_names_others() {
+    let p = launch_setup();
+    let act = serde_json::json!({ "mode": "args", "exe": "SampleGame.exe", "env": { "TIRGUMIM_LANG": "he" }, "via": "direct" });
+    launch_pack(&p, "adopt", act, serde_json::json!([{ "path": "data.win", "patched": "data.win.changed", "output": "tirgumim/he/data.win" }])).unwrap();
+    let src = p.s.root.join("packsrc-adopt");
+    fs::remove_dir_all(src.join("files")).unwrap();
+    fs::create_dir_all(src.join("files")).unwrap();
+    fs::write(src.join("files/xinput9_1_0.dll"), b"proxy").unwrap();
+    let made = make_pack(&src.join("pack.config.json"), Some(&p.clean), Some(&p.s.root.join("adopt.zip")), None).unwrap();
+    let before = tree(&p.s.game);
+
+    // A different DLL is in the way: refused, and named.
+    fs::write(p.s.game.join("xinput9_1_0.dll"), b"someone else's").unwrap();
+    let e = p.s.inst.install(&opts(&p.s, &made.out, None, false), &mut |_| {}).unwrap_err();
+    assert_eq!((e.code.as_str(), e.details.clone()), ("WOULD_REPLACE", vec!["xinput9_1_0.dll".to_string()]));
+
+    // The same files a manual install left: adopted, and gone again after uninstall.
+    fs::write(p.s.game.join("xinput9_1_0.dll"), b"proxy").unwrap();
+    fs::create_dir_all(p.s.game.join("tirgumim/he")).unwrap();
+    fs::write(p.s.game.join("tirgumim/he/data.win"), &p.changed).unwrap();
+    let rec = p.s.inst.install(&opts(&p.s, &made.out, None, false), &mut |_| {}).unwrap();
+    assert!(rec.files.iter().all(|f| !f.backed_up));
+    assert!(p.s.inst.verify("sample-game").unwrap().intact);
+    p.s.inst.uninstall("sample-game").unwrap();
+    let after = tree(&p.s.game);
+    assert!(!p.s.game.join("xinput9_1_0.dll").exists() && !p.s.game.join("tirgumim/he/data.win").exists());
+    for (k, v) in &before {
+        assert_eq!(after.get(k), Some(v), "{k} must be as before");
+    }
+}
+
 /// The whole play loop with a real program standing in for the game: swap in, start it directly, see it in the
 /// process list, see it gone, restore.
 #[cfg(windows)]

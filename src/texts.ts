@@ -92,12 +92,12 @@ const ERRORS: Record<string, string> = {
   BAD_EMAIL: 'כתובת האימייל לא תקינה.',
   SECURE_STORE: 'לא הצלחנו לשמור את פרטי ההתחברות במחשב.',
   AUTH_REQUEST_EXPIRED: 'הקישור פג תוקף. שלחו קישור חדש.',
-  WOULD_REPLACE: 'חבילת התרגום מנסה להחליף קבצים של המשחק, וזה לא מותר בתרגום שפועל רק מהמשגר.',
+  WOULD_REPLACE: 'בתיקיית המשחק כבר יש קבצים בשמות של קבצי התרגום, והם שונים מהם (אולי מהתקנה ידנית קודמת). מחקו אותם או אמתו את קבצי המשחק ב-Steam, ונסו שוב. הקבצים:',
 }
 
 export function errorText(e: PackError): string {
   const base = ERRORS[e.code] ?? 'אירעה שגיאה.'
-  if ((e.code === 'REQUIRES' || e.code === 'PATCH_SOURCE' || e.code === 'GAME_CHANGED') && e.details?.length) return `${base} ${e.details.join(' · ')}`
+  if ((e.code === 'REQUIRES' || e.code === 'PATCH_SOURCE' || e.code === 'GAME_CHANGED' || e.code === 'WOULD_REPLACE') && e.details?.length) return `${base} ${e.details.join(' · ')}`
   return e.code in ERRORS ? base : `${base} (${e.message})`
 }
 
