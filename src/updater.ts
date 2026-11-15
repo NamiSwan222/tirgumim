@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { check, type Update } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
 
-const EVERY = 6 * 60 * 60 * 1000
+// Hourly, so a new version shows up soon after it is released.
+const EVERY = 60 * 60 * 1000
 
 export interface SelfUpdate {
   /** The newer version, if there is one. */
