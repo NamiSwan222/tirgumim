@@ -14,10 +14,14 @@ use super::manifest::{is_id, is_sha256, Require};
 use super::util::{self, compare_versions, wildcard};
 
 pub const USER_AGENT: &str = concat!("Tirgumim-Launcher/", env!("CARGO_PKG_VERSION"));
-/// A GitHub answer is reused this long (GitHub allows 60 questions an hour without a login).
+/// A GitHub answer is reused this long without asking anything (GitHub allows 60 API questions an hour without a
+/// login, shared by everything on the player's network).
 pub const GITHUB_CACHE_SECS: u64 = 600;
 /// Even "refresh now" doesn't ask GitHub again sooner than this.
 pub const GITHUB_MIN_SECS: u64 = 30;
+/// A release list whose releases feed hasn't changed is trusted this long before the API is asked again anyway (a
+/// file swapped in an existing release doesn't show in the feed).
+pub const RELEASES_MAX_SECS: u64 = 12 * 3600;
 /// No release matches yet: the translation simply isn't published (not an error to show).
 pub const NO_RELEASE: &str = "No release matches";
 
@@ -324,20 +328,45 @@ pub fn pick_release_for(releases: &[Value], src: &PackSource, launcher_version: 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CachedReleases {
+    /// When the API list was fetched.
     fetched_at: u64,
+    /// When the list was last confirmed current (by the API or by an unchanged feed).
+    #[serde(default)]
+    checked_at: u64,
+    /// The releases feed at `fetched_at` (see `feed_fingerprint`); empty: not known, so the feed can't vouch.
+    #[serde(default)]
+    feed: String,
     releases: Vec<Value>,
 }
 
-/// GitHub's release lists, kept in `sources.json` so each repository is asked at most every ten minutes.
+/// What a repo's `releases.atom` says, reduced to what changes when a release is published, edited or deleted: each
+/// entry's id (it holds the tag) and its update time. The feed is a github.com page, not the API, so asking it
+/// costs nothing from the 60-an-hour limit.
+pub fn feed_fingerprint(atom: &str) -> Option<String> {
+    if !atom.contains("<feed") {
+        return None;
+    }
+    let tag = |chunk: &str, name: &str| -> String {
+        let (open, close) = (format!("<{name}>"), format!("</{name}>"));
+        chunk.find(&open).and_then(|a| chunk[a + open.len()..].find(&close).map(|b| chunk[a + open.len()..a + open.len() + b].trim().to_string())).unwrap_or_default()
+    };
+    let lines: Vec<String> = atom.split("<entry>").skip(1).map(|e| format!("{} {}", tag(e, "id"), tag(e, "updated"))).collect();
+    Some(lines.join("\n"))
+}
+
+/// GitHub's release lists, kept in `sources.json`. A kept list is checked against the repo's releases feed (free);
+/// the API (60 an hour) is asked only when the feed changed, the list is older than `RELEASES_MAX_SECS`, or there
+/// is no list yet. With nothing new published, a launcher start costs no API calls at all.
 pub struct ReleaseCache {
     file: PathBuf,
-    /// Tests point this at a local file:// URL.
+    /// Tests point these at local file:// URLs.
     pub api_base: String,
+    pub web_base: String,
 }
 
 impl ReleaseCache {
     pub fn new(data_dir: &Path) -> Self {
-        ReleaseCache { file: data_dir.join("sources.json"), api_base: "https://api.github.com".into() }
+        ReleaseCache { file: data_dir.join("sources.json"), api_base: "https://api.github.com".into(), web_base: "https://github.com".into() }
     }
 
     fn trim(r: &Value) -> Value {
@@ -354,15 +383,29 @@ impl ReleaseCache {
         t
     }
 
-    /// The release list for `repo`: from the cache while it is fresh (or `force` and it is very fresh), else from
-    /// GitHub; if GitHub can't be reached, the last list we had.
+    fn feed(&self, repo: &str) -> Option<String> {
+        fetch_text(&format!("{}/{repo}/releases.atom", self.web_base.trim_end_matches('/'))).ok().and_then(|t| feed_fingerprint(&t))
+    }
+
+    /// The release list for `repo`: the kept one while it was confirmed recently (or `force` and very recently), or
+    /// while the releases feed is unchanged; else from the API; if GitHub can't be reached, the last list we had.
     pub fn releases(&self, repo: &str, force: bool) -> Result<Vec<Value>, String> {
         let mut all: BTreeMap<String, CachedReleases> = util::read_json(&self.file).unwrap_or_default();
         let now = util::now_secs();
+        let mut feed = None;
         if let Some(c) = all.get(repo) {
-            let age = now.saturating_sub(c.fetched_at);
-            if age < if force { GITHUB_MIN_SECS } else { GITHUB_CACHE_SECS } {
+            if now.saturating_sub(c.checked_at.max(c.fetched_at)) < if force { GITHUB_MIN_SECS } else { GITHUB_CACHE_SECS } {
                 return Ok(c.releases.clone());
+            }
+            feed = self.feed(repo);
+            let unchanged = !c.feed.is_empty() && feed.as_deref() == Some(c.feed.as_str());
+            // A release published before its files were uploaded: uploading them doesn't change the feed.
+            let has_files = c.releases.first().is_none_or(|r| r.get("assets").and_then(Value::as_array).is_some_and(|a| !a.is_empty()));
+            if unchanged && has_files && now.saturating_sub(c.fetched_at) < RELEASES_MAX_SECS {
+                let releases = c.releases.clone();
+                all.get_mut(repo).unwrap().checked_at = now;
+                let _ = util::write_json_atomic(&self.file, &all);
+                return Ok(releases);
             }
         }
         let url = format!("{}/repos/{repo}/releases?per_page=50", self.api_base.trim_end_matches('/'));
@@ -370,7 +413,9 @@ impl ReleaseCache {
         match fetched {
             Ok(list) => {
                 let releases: Vec<Value> = list.iter().map(Self::trim).collect();
-                all.insert(repo.into(), CachedReleases { fetched_at: now, releases: releases.clone() });
+                // The feed as it is now, so the next start can tell whether anything changed since.
+                let feed = feed.or_else(|| self.feed(repo)).unwrap_or_default();
+                all.insert(repo.into(), CachedReleases { fetched_at: now, checked_at: now, feed, releases: releases.clone() });
                 let _ = util::write_json_atomic(&self.file, &all);
                 Ok(releases)
             }
@@ -530,5 +575,82 @@ mod tests {
         fs::remove_file(list_file.join("releases")).unwrap();
         assert_eq!(cache.resolve(&src, false).unwrap().version, "0.1.0");
         assert_eq!(cache.resolve(&src, true).unwrap().version, "0.1.0");
+    }
+
+    #[test]
+    fn unchanged_feed_spares_the_api() {
+        let dir = tempfile::tempdir().unwrap();
+        let (api, web) = (dir.path().join("api"), dir.path().join("web"));
+        let list_dir = api.join("repos").join("x").join("y");
+        fs::create_dir_all(&list_dir).unwrap();
+        fs::create_dir_all(web.join("x").join("y")).unwrap();
+        let h = "c".repeat(64);
+        let write_list = |tags: &[&str]| {
+            let l: Vec<Value> = tags.iter().map(|t| rel(&format!("pbz-{t}"), &format!("pbz-he-{t}.zip"), Some(&h), false)).collect();
+            fs::write(list_dir.join("releases"), serde_json::to_string(&l).unwrap()).unwrap();
+        };
+        let write_feed = |entries: &[(&str, &str)]| {
+            let e: String = entries.iter().map(|(t, u)| format!("<entry>\n<id>tag:github.com,2008:Repository/1/pbz-{t}</id>\n<updated>{u}</updated>\n<title>x</title></entry>")).collect();
+            fs::write(web.join("x").join("y").join("releases.atom"), format!("<?xml version=\"1.0\"?><feed><updated>z</updated>{e}</feed>")).unwrap();
+        };
+        let mut cache = ReleaseCache::new(dir.path());
+        let url = |p: &Path| url::Url::from_directory_path(p).unwrap().to_string();
+        cache.api_base = url(&api);
+        cache.web_base = url(&web);
+        let src = PackSource { github: Some("x/y".into()), ..Default::default() };
+        let age = |secs: u64| {
+            let mut all: BTreeMap<String, CachedReleases> = util::read_json(&cache.file).unwrap();
+            let c = all.get_mut("x/y").unwrap();
+            c.fetched_at -= secs;
+            c.checked_at -= secs;
+            util::write_json_atomic(&cache.file, &all).unwrap();
+        };
+
+        write_list(&["0.1.0"]);
+        write_feed(&[("0.1.0", "t1")]);
+        assert_eq!(cache.resolve(&src, false).unwrap().version, "0.1.0");
+        // The API now "has" 0.2.0 but the feed is unchanged (as if the API were rate-limited): the kept list stands,
+        // even on a forced refresh, without asking the API.
+        write_list(&["0.2.0", "0.1.0"]);
+        age(GITHUB_CACHE_SECS);
+        assert_eq!(cache.resolve(&src, false).unwrap().version, "0.1.0");
+        age(GITHUB_MIN_SECS);
+        assert_eq!(cache.resolve(&src, true).unwrap().version, "0.1.0");
+        // A new release shows in the feed: the API is asked.
+        write_feed(&[("0.2.0", "t2"), ("0.1.0", "t1")]);
+        age(GITHUB_CACHE_SECS);
+        assert_eq!(cache.resolve(&src, false).unwrap().version, "0.2.0");
+        // An edited release (new update time) is noticed too.
+        write_list(&["0.2.1", "0.1.0"]);
+        write_feed(&[("0.2.0", "t3"), ("0.1.0", "t1")]);
+        age(GITHUB_CACHE_SECS);
+        assert_eq!(cache.resolve(&src, false).unwrap().version, "0.2.1");
+        // The newest release had no files yet: the feed can't vouch, so the API is asked after 10 minutes.
+        let mut bare = rel("pbz-0.2.2", "x.zip", Some(&h), false);
+        bare["assets"] = json!([]);
+        fs::write(list_dir.join("releases"), serde_json::to_string(&vec![bare]).unwrap()).unwrap();
+        write_feed(&[("0.2.2", "t4")]);
+        age(GITHUB_CACHE_SECS);
+        assert_eq!(cache.resolve(&src, false).unwrap_err(), NO_RELEASE);
+        write_list(&["0.2.2"]);
+        age(GITHUB_CACHE_SECS);
+        assert_eq!(cache.resolve(&src, false).unwrap().version, "0.2.2");
+        // Feed unchanged but the list is old: asked anyway.
+        write_list(&["0.3.0"]);
+        age(RELEASES_MAX_SECS);
+        assert_eq!(cache.resolve(&src, false).unwrap().version, "0.3.0");
+        // Feed can't be read: the old age rule.
+        fs::remove_file(web.join("x").join("y").join("releases.atom")).unwrap();
+        write_list(&["0.4.0"]);
+        age(GITHUB_CACHE_SECS);
+        assert_eq!(cache.resolve(&src, false).unwrap().version, "0.4.0");
+    }
+
+    #[test]
+    fn feed_fingerprints() {
+        assert_eq!(feed_fingerprint("<html>rate limited</html>"), None);
+        assert_eq!(feed_fingerprint("<feed><title>t</title></feed>").as_deref(), Some(""));
+        let a = "<feed><entry><id>a/v1</id><updated>1</updated></entry><entry><id>a/v0</id><updated>0</updated></entry></feed>";
+        assert_eq!(feed_fingerprint(a).as_deref(), Some("a/v1 1\na/v0 0"));
     }
 }

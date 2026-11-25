@@ -68,9 +68,12 @@ every push.
   repository's releases, keeps those whose tag and file name match the patterns (`*` and `?`), takes the
   highest version (the rightmost number run in the tag: `mygame-0.2.1` → `0.2.1`) and uses the SHA-256 GitHub
   publishes for the file (`digest`). No checksum from GitHub means no install. The release notes become the
-  changelog unless `changelog` is set. Release lists are cached in `data\sources.json` for 10 minutes
-  (refresh asks again, but not sooner than 30 seconds); if GitHub can't be reached, the last list is used.
-  Without a login GitHub allows 60 requests an hour, and one repository serves every game.
+  changelog unless `changelog` is set. Release lists are cached in `data\sources.json`. Without a login the
+  GitHub API allows 60 requests an hour per network, so a kept list is not re-fetched just because it is old:
+  after 10 minutes (refresh: 30 seconds) the launcher reads the repository's `releases.atom` feed from
+  github.com, which isn't API-limited, and asks the API only if the feed changed (a release published, edited
+  or deleted), or the list is over 12 hours old, or the feed can't be read. With nothing new published a start
+  or refresh costs no API calls, however many packs there are; if GitHub can't be reached, the last list is used.
 - **Written out**: `version`, `url`, `sha256`, `size`, `changelog`. `url` may be absolute (`https://`,
   `file://`) or relative to the catalog URL (used by the local dev catalog).
 
