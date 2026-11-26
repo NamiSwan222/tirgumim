@@ -1,6 +1,6 @@
 [package]
 name = "tirgumim"
-version = "0.5.3"
+version = "0.5.4"
 description = "Tirgumim launcher: installs Hebrew translation packs into games"
 authors = ["Tirgumim"]
 edition = "2021"
