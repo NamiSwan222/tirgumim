@@ -58,6 +58,9 @@ pub struct Shared {
     steam_ids: Mutex<HashMap<String, Option<String>>>,
     /// Games running in Hebrew from the launcher right now (swap packs: a watcher restores them on exit).
     sessions: Mutex<HashSet<String>>,
+    /// Args packs started from the launcher and still running: shown as "playing in Hebrew". Nothing to restore,
+    /// so these never keep the launcher open.
+    arg_sessions: Mutex<HashSet<String>>,
     /// The window was closed while a game ran: quit once every game is back to normal.
     exit_after: AtomicBool,
     /// Sign-in and who owns which paid translation (see ENTITLEMENTS.md).
@@ -213,7 +216,7 @@ impl Shared {
         let paid = g.paid || rec.as_ref().is_some_and(|r| r.paid);
         // While a swap pack's files are in the game, its waiting copies are away: not a repair case.
         let swapped = rec.as_ref().is_some_and(|r| !r.swap.is_empty() && swap::is_active(Path::new(&r.game_dir)));
-        let playing = swapped || self.sessions.lock().unwrap().contains(&g.id);
+        let playing = swapped || self.sessions.lock().unwrap().contains(&g.id) || self.arg_sessions.lock().unwrap().contains(&g.id);
         let verify = rec.as_ref().filter(|_| !swapped).and_then(|_| self.installer.verify(&g.id));
         let pack = self.pack(&g.id);
         let available = pack.as_ref().and_then(|p| p.as_ref().ok()).cloned();
@@ -373,7 +376,7 @@ impl Shared {
         self.accounts.check_access(g.paid || rec.paid, game_id)?;
         let act = rec.activation.clone().ok_or_else(|| err("NOT_LAUNCH_ONLY", "This translation is always on; start the game as usual"))?;
         let dir = PathBuf::from(&rec.game_dir);
-        if self.sessions.lock().unwrap().contains(game_id) {
+        if self.sessions.lock().unwrap().contains(game_id) || self.arg_sessions.lock().unwrap().contains(game_id) {
             return Err(err("SESSION_ACTIVE", "The game is already running in Hebrew"));
         }
         // Started some other way (Steam): never swap files under a running game.
@@ -399,6 +402,9 @@ impl Shared {
         if watch {
             self.sessions.lock().unwrap().insert(game_id.to_string());
             spawn_watcher(app.clone(), game_id.to_string(), false);
+        } else {
+            self.arg_sessions.lock().unwrap().insert(game_id.to_string());
+            spawn_arg_watcher(app.clone(), game_id.to_string());
         }
         let _ = app.emit("session", json!({ "gameId": game_id, "state": "started" }));
         Ok(json!({ "startingSteam": cmd.starting_steam, "via": if act.via == Via::Steam { "steam" } else { "direct" }, "watched": watch }))
@@ -413,33 +419,49 @@ impl Shared {
     }
 }
 
-/// Waits for the game to start and to exit (all of its processes gone for 15 s, so a game that restarts itself
-/// through Steam is still covered), then puts the original files back. `already_running`: adopted at launcher
-/// start after the window had been closed or the launcher had crashed.
+/// Blocks until the game has started and exited (all of its processes gone for 15 s, so a game that restarts itself
+/// through Steam is still covered). Emits "running" once it is seen. False: it never started within 3 minutes.
+fn wait_for_exit(app: &AppHandle, game_id: &str, already_running: bool) -> bool {
+    use std::time::{Duration, Instant};
+    let st = app.state::<Shared>();
+    let names: Vec<String> = st.game(game_id).map(|g| g.detect.process_names.iter().map(|p| p.to_lowercase()).collect()).unwrap_or_default();
+    let start = Instant::now();
+    let (mut seen, mut last) = (already_running, Instant::now());
+    let mut told = false;
+    loop {
+        std::thread::sleep(Duration::from_secs(2));
+        let procs = detect::running_processes();
+        if names.iter().any(|n| procs.contains(n)) {
+            seen = true;
+            last = Instant::now();
+            if !told {
+                told = true;
+                let _ = app.emit("session", json!({ "gameId": game_id, "state": "running" }));
+            }
+        } else if seen && last.elapsed() > Duration::from_secs(15) {
+            return true;
+        } else if !seen && start.elapsed() > Duration::from_secs(180) {
+            return false;
+        }
+    }
+}
+
+/// An args pack started from the launcher: "playing in Hebrew" until the game exits. No files to put back.
+fn spawn_arg_watcher(app: AppHandle, game_id: String) {
+    std::thread::spawn(move || {
+        wait_for_exit(&app, &game_id, false);
+        app.state::<Shared>().arg_sessions.lock().unwrap().remove(&game_id);
+        let _ = app.emit("session", json!({ "gameId": game_id, "state": "ended" }));
+    });
+}
+
+/// Waits for a swap pack's game to start and exit (see `wait_for_exit`), then puts the original files back.
+/// `already_running`: adopted at launcher start after the window had been closed or the launcher had crashed.
 fn spawn_watcher(app: AppHandle, game_id: String, already_running: bool) {
     std::thread::spawn(move || {
-        use std::time::{Duration, Instant};
         let st = app.state::<Shared>();
-        let names: Vec<String> = st.game(&game_id).map(|g| g.detect.process_names.iter().map(|p| p.to_lowercase()).collect()).unwrap_or_default();
-        let start = Instant::now();
-        let (mut seen, mut last) = (already_running, Instant::now());
-        let mut told = false;
-        loop {
-            std::thread::sleep(Duration::from_secs(2));
-            let procs = detect::running_processes();
-            if names.iter().any(|n| procs.contains(n)) {
-                seen = true;
-                last = Instant::now();
-                if !told {
-                    told = true;
-                    let _ = app.emit("session", json!({ "gameId": game_id, "state": "running" }));
-                }
-            } else if seen && last.elapsed() > Duration::from_secs(15) {
-                break;
-            } else if !seen && start.elapsed() > Duration::from_secs(180) {
-                let _ = app.emit("session", json!({ "gameId": game_id, "state": "neverStarted" }));
-                break;
-            }
+        if !wait_for_exit(&app, &game_id, already_running) {
+            let _ = app.emit("session", json!({ "gameId": game_id, "state": "neverStarted" }));
         }
         let res = st.installer.record(&game_id).map(|r| swap::restore(Path::new(&r.game_dir), &r.swap));
         st.sessions.lock().unwrap().remove(&game_id);
@@ -911,6 +933,7 @@ pub fn run(dev: bool) {
                 poster_misses: Mutex::new(HashSet::new()),
                 steam_ids: Mutex::new(HashMap::new()),
                 sessions: Mutex::new(HashSet::new()),
+                arg_sessions: Mutex::new(HashSet::new()),
                 exit_after: AtomicBool::new(false),
                 accounts: Accounts::new(
                     &data,

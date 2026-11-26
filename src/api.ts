@@ -73,7 +73,7 @@ export interface Progress {
 
 export interface Session {
   gameId: string
-  state: 'started' | 'running' | 'restored' | 'restoreFailed' | 'neverStarted'
+  state: 'started' | 'running' | 'restored' | 'restoreFailed' | 'neverStarted' | 'ended'
   leftChanged?: string[]
   error?: PackError
 }
